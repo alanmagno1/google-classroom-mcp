@@ -1,0 +1,28 @@
+[project]
+name = "google-classroom-mcp"
+version = "0.1.0"
+description = "Servidor MCP para Google Classroom: cursos, tareas, entregas, anuncios y materiales del alumno"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Alan Magno" }]
+keywords = ["mcp", "google-classroom", "classroom", "claude"]
+dependencies = [
+    "mcp[cli]>=2.0",
+    "google-api-python-client>=2.150",
+    "google-auth-oauthlib>=1.2",
+    "google-auth-httplib2>=0.2",
+]
+
+[project.scripts]
+google-classroom-mcp = "google_classroom_mcp.server:main"
+
+[project.urls]
+Repository = "https://github.com/AlanMagno1/google-classroom-mcp"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/google_classroom_mcp"]
