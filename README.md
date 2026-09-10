@@ -3,16 +3,18 @@
 Servidor [MCP](https://modelcontextprotocol.io) para Google Classroom, pensado para el
 alumno y con soporte para varias cuentas de Google a la vez. Permite que Claude Code,
 Claude Desktop, Cursor o cualquier cliente MCP consulte tus cursos, tareas pendientes,
-fechas de entrega, calificaciones y anuncios, descargue los materiales adjuntos de Drive
-y, si se lo pides, suba tus archivos a Drive y los adjunte o entregue en una tarea.
+fechas de entrega, calificaciones y anuncios y, si se lo pides, adjunte archivos o
+entregue una tarea.
 
-Usa la API oficial de Google Classroom con OAuth de tu propia cuenta.
+Usa la API oficial de Google Classroom con OAuth de tu propia cuenta y solo pide
+permisos de Classroom. Los archivos (bajar materiales, subir tu tarea) se manejan con el
+[servidor MCP oficial de Google Drive](https://developers.google.com/workspace/guides/configure-mcp-servers),
+que en Claude se conecta con un clic; este servidor solo pasa los ids y enlaces de Drive.
 
 > **Sobre las entregas.** La API de Google solo permite adjuntar archivos y entregar
 > desde la misma aplicación que creó la tarea. Si tu profesor la creó desde la web de
-> Classroom (lo normal), `submit_assignment` sube tus archivos a Drive pero el paso de
-> adjuntar o entregar devuelve `403 @ProjectPermissionDenied`. En ese caso solo queda
-> adjuntar el archivo desde classroom.google.com. Es una restricción de Google, no del
+> Classroom (lo normal), `submit_assignment` devuelve `403 @ProjectPermissionDenied` y
+> hay que adjuntar desde classroom.google.com. Es una restricción de Google, no del
 > servidor.
 
 ## Requisitos
@@ -28,7 +30,7 @@ Usa la API oficial de Google Classroom con OAuth de tu propia cuenta.
 **1. Crea el client secret en Google Cloud** (una sola vez, unos 5 minutos):
 
 1. Entra a <https://console.cloud.google.com> y crea un proyecto, por ejemplo `classroom-mcp`.
-2. APIs y servicios > Biblioteca: habilita **Google Classroom API** y **Google Drive API**.
+2. APIs y servicios > Biblioteca: habilita **Google Classroom API**.
 3. APIs y servicios > Pantalla de consentimiento de OAuth (o "Google Auth Platform"):
    tipo de usuario **Externo**, llena nombre y correo, y en **Usuarios de prueba**
    agrega **todas** las cuentas de Google con las que entras a Classroom.
@@ -60,7 +62,7 @@ Listo. Abre Claude Code y pídele, por ejemplo:
 
 > Revisa https://classroom.google.com/c/NzE2NDU5MjM0/a/NjA1MzIx/details y dime qué piden.
 
-> Sube ~/tarea3.pdf a la tarea 3 de Cálculo de la cuenta unam y entrégala.
+> Bájame la presentación de la clase de hoy de Cálculo (usa el MCP de Drive con el id que devuelve este servidor).
 
 ### Otros clientes (Claude Desktop, Cursor, etc.)
 
@@ -81,7 +83,6 @@ Listo. Abre Claude Code y pídele, por ejemplo:
 |---|---|
 | `GOOGLE_CLASSROOM_MCP_CONFIG_DIR` | Carpeta de configuración. Default: `~/.config/google-classroom-mcp` |
 | `GOOGLE_CLASSROOM_CLIENT_SECRET` | Ruta al client secret. Default: `<config>/client_secret.json` |
-| `GOOGLE_CLASSROOM_DOWNLOAD_DIR` | Carpeta de descargas. Default: `~/Downloads/google-classroom-mcp` |
 
 ### Varias cuentas de Google
 
@@ -92,7 +93,6 @@ Un solo servidor maneja todas tus cuentas. Cada herramienta acepta un parámetro
 - `list_courses` y `list_pending_assignments` sin `account` recorren todas las cuentas
   y marcan a cuál pertenece cada curso.
 - Las herramientas que reciben un curso o una tarea averiguan solas en qué cuenta está.
-- `download_file` prueba con cada cuenta hasta que una pueda leer el archivo.
 
 Si por alguna razón quieres dos servidores separados, sigue funcionando la variable
 `GOOGLE_CLASSROOM_MCP_CONFIG_DIR` con un nombre de servidor distinto para cada uno.
@@ -111,10 +111,12 @@ ids en las URLs de Classroom van en base64 y el servidor los decodifica solo.
 | `get_course_contents(course_id)` | Tareas, preguntas y materiales del curso agrupados por tema, con el estado de tu entrega y calificación. |
 | `get_assignment(coursework_id_or_url, course_id?)` | Detalle de una tarea: instrucciones, fecha, puntos, adjuntos y tu entrega. Acepta la URL completa de Classroom. |
 | `list_announcements(course_id, limit?)` | Anuncios del tablón, del más reciente al más antiguo. |
-| `download_file(drive_id_or_url, filename?, export_mime_type?)` | Descarga un archivo de Drive a `~/Downloads/google-classroom-mcp/`. Docs y Slides se exportan a PDF, Sheets a CSV. |
-| `upload_to_drive(path, folder?)` | Sube un archivo local a tu Drive (carpeta "Classroom MCP") y devuelve `drive_id` y enlace. |
-| `submit_assignment(coursework_id_or_url, course_id?, file_paths?, drive_ids?, links?, turn_in?)` | Sube archivos locales a Drive, los adjunta a tu entrega (junto con `drive_ids` y `links`) y si `turn_in=True` la entrega. Ver el aviso de arriba. |
+| `submit_assignment(coursework_id_or_url, course_id?, drive_ids?, links?, turn_in?)` | Adjunta archivos de Drive (ids o URLs) y/o enlaces a tu entrega y si `turn_in=True` la entrega. Ver el aviso de arriba. |
 | `reclaim_submission(coursework_id_or_url, course_id?)` | Anula una entrega ya enviada para poder modificarla. Misma restricción. |
+
+Los materiales y las entregas devuelven `drive_id` y `url` de cada archivo. Para leerlos o
+para subir un archivo local a Drive usa el servidor MCP de Google Drive y pasa el id
+resultante a `submit_assignment(drive_ids=[...])`.
 
 ## Comandos
 
@@ -128,12 +130,12 @@ google-classroom-mcp                                           # arranca el serv
 
 ## Permisos que pide
 
-Lectura de cursos, materiales, anuncios, temas, lista del curso (para leer tu perfil) y
-correo del perfil. Lectura y escritura de tu propio trabajo de clase y tus entregas
-(`classroom.coursework.me`). Drive de solo lectura para descargar adjuntos, y
-`drive.file` para subir tus archivos (solo ve los archivos que él mismo creó). Nada se
-envía a ningún servidor que no sea Google. `submit_assignment` y `reclaim_submission`
-modifican tu entrega: Claude solo debe usarlas cuando se lo pidas explícitamente.
+Solo permisos de Classroom: lectura de cursos, materiales, anuncios, temas, lista del
+curso (para leer tu perfil) y correo del perfil, y lectura y escritura de tu propio
+trabajo de clase y tus entregas (`classroom.coursework.me`). Ningún permiso de Drive.
+Nada se envía a ningún servidor que no sea Google. `submit_assignment` y
+`reclaim_submission` modifican tu entrega: Claude solo debe usarlas cuando se lo pidas
+explícitamente.
 
 ## Desarrollo
 
