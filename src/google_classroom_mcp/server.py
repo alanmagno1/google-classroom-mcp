@@ -6,8 +6,9 @@ Drive o enlaces a la entrega, entregar y retirar la entrega).
 
 Pide permisos de Classroom y lectura de Drive: los adjuntos de tareas, materiales y
 anuncios se pueden bajar al disco con download_file / download_assignment_files (los
-Docs, Sheets y Slides de Google se exportan a PDF, xlsx, etc.). Subir un archivo local a
-Drive para una entrega se hace con el servidor MCP oficial de Google Drive.
+Docs, Sheets y Slides de Google se exportan a PDF, xlsx, etc.). Con el permiso opcional
+drive.file, upload_file y submit_assignment(files=...) suben archivos locales a la
+carpeta "Entregas Classroom" de tu Drive para adjuntarlos a una entrega.
 
 Varias cuentas: corre `setup` una vez por cuenta de Google. Cada herramienta acepta
 un parámetro `account` opcional (alias o correo). Si lo omites y hay una sola cuenta
@@ -58,7 +59,8 @@ CLIENT_SECRET_FILE = Path(os.environ.get("GOOGLE_CLASSROOM_CLIENT_SECRET", CONFI
 ACCOUNTS_DIR = CONFIG_DIR / "accounts"
 DOWNLOAD_DIR = Path(os.environ.get("GOOGLE_CLASSROOM_DOWNLOAD_DIR", Path.home() / "Downloads" / "google-classroom-mcp"))
 
-SCOPES = [
+# Permisos mínimos: sin ellos ninguna herramienta funciona.
+CORE_SCOPES = [
     "https://www.googleapis.com/auth/classroom.courses.readonly",
     "https://www.googleapis.com/auth/classroom.coursework.me",
     "https://www.googleapis.com/auth/classroom.courseworkmaterials.readonly",
@@ -69,6 +71,12 @@ SCOPES = [
     # Solo lectura de Drive: para bajar los adjuntos (Google no los sirve por la API de Classroom).
     "https://www.googleapis.com/auth/drive.readonly",
 ]
+# Opcional: crear archivos en Drive (solo ve los que crea esta app). Lo usan upload_file y
+# submit_assignment(files=...). Un token autorizado sin él sigue sirviendo para todo lo demás.
+UPLOAD_SCOPE = "https://www.googleapis.com/auth/drive.file"
+SCOPES = [*CORE_SCOPES, UPLOAD_SCOPE]
+UPLOAD_FOLDER = "Entregas Classroom"
+FOLDER_MIME = "application/vnd.google-apps.folder"
 
 # Archivos nativos de Google (Docs, Sheets, Slides...) no tienen binario: se exportan.
 GOOGLE_APPS_PREFIX = "application/vnd.google-apps."
@@ -118,9 +126,12 @@ mcp = MCPServer(
         "parámetro account (alias o correo) es opcional; si hay varias cuentas y una herramienta "
         "no puede deducir la cuenta, te lo dirá. Para bajar los adjuntos de una tarea usa "
         "download_assignment_files (o download_file con un drive_id o URL de Drive); devuelven rutas "
-        "locales que puedes leer con Read. Para subir un archivo local a Drive usa el servidor MCP de "
-        "Google Drive. submit_assignment y reclaim_submission modifican la entrega: úsalas solo cuando "
-        "el usuario lo pida explícitamente."
+        "locales que puedes leer con Read. Para entregar un archivo local usa "
+        "submit_assignment(files=[ruta]): lo sube a Drive e intenta adjuntarlo; si Google lo rechaza "
+        "(@ProjectPermissionDenied, lo normal con tareas creadas por el profesor) el archivo ya queda "
+        "en Drive y el usuario solo lo elige en Classroom. upload_file, submit_assignment y "
+        "reclaim_submission crean archivos o modifican la entrega: úsalas solo cuando el usuario lo "
+        "pida explícitamente."
     ),
 )
 
@@ -206,7 +217,7 @@ def _course_id_of(value: str) -> str:
 
 
 def _drive_id(value: str) -> str:
-    """Acepta un id de Drive o una URL (…/d/ID/…, …?id=ID, …/file/d/ID)."""
+    """Acepta un id de Drive o una URL (…/d/ID/…, …?id=ID, …/file/d/ID, …/drive/folders/ID)."""
     value = value.strip()
     if not value.startswith("http"):
         return value
@@ -216,7 +227,7 @@ def _drive_id(value: str) -> str:
         return qs["id"][0]
     parts = [p for p in u.path.split("/") if p]
     for i, p in enumerate(parts[:-1]):
-        if p == "d":
+        if p in ("d", "folders"):
             return parts[i + 1]
     raise ClassroomError(f"No pude extraer un id de Drive de: {value}")
 
@@ -339,6 +350,19 @@ def _safe_alias(alias: str) -> str:
     return alias
 
 
+def _granted_scopes(scopes, who: str, alias: str) -> set[str]:
+    """Permisos con los que se autorizó un token; falla si falta alguno de los mínimos."""
+    granted = set(scopes or CORE_SCOPES)
+    missing = set(CORE_SCOPES) - granted
+    if missing:
+        short = ", ".join(sorted(s.rsplit("/", 1)[1] for s in missing))
+        raise ClassroomError(
+            f"El token de la cuenta {who} no tiene todos los permisos que necesita esta versión "
+            f"(faltan: {short}). Vuelve a correr `google-classroom-mcp setup --as {alias}`."
+        )
+    return granted
+
+
 class Account:
     """Una cuenta de Google autorizada: credenciales, servicios y perfil."""
 
@@ -356,6 +380,7 @@ class Account:
         self._classroom = None
         self._drive = None
         self._profile: dict | None = None
+        self.granted_scopes: set[str] = set()
 
     def __repr__(self) -> str:
         return f"{self.alias} ({self.email})" if self.email and self.email != self.alias else self.alias
@@ -367,12 +392,11 @@ class Account:
 
         data = json.loads(self.path.read_text())
         info = data.get("credentials", data)
-        creds = Credentials.from_authorized_user_info(info, SCOPES)
-        if creds.scopes and not set(SCOPES) <= set(creds.scopes):
-            raise ClassroomError(
-                f"El token de la cuenta {self} no tiene todos los permisos que necesita esta versión. "
-                f"Vuelve a correr `google-classroom-mcp setup --as {self.alias}`."
-            )
+        # Sin pasar SCOPES: el token se carga con los permisos con que se autorizó. Si se
+        # pidieran los actuales y el token fuera de una versión anterior, Google rechazaría
+        # renovarlo y dejarían de funcionar hasta las herramientas que no necesitan lo nuevo.
+        creds = Credentials.from_authorized_user_info(info)
+        self.granted_scopes = _granted_scopes(creds.scopes, repr(self), self.alias)
         if not creds.valid:
             if creds.expired and creds.refresh_token:
                 try:
@@ -423,6 +447,19 @@ class Account:
 
             self._drive = build("drive", "v3", credentials=self.creds, cache_discovery=False)
         return self._drive
+
+    @property
+    def can_upload(self) -> bool:
+        self.creds  # noqa: B018  (carga granted_scopes)
+        return UPLOAD_SCOPE in self.granted_scopes
+
+    def require_upload(self) -> None:
+        if not self.can_upload:
+            hint = f" --hint {self.email}" if self.email else ""
+            raise ClassroomError(
+                f"La cuenta {self} se autorizó sin el permiso para subir archivos a Drive. "
+                f"Corre `google-classroom-mcp setup --as {self.alias}{hint}` y vuelve a intentar."
+            )
 
     # --- helpers -----------------------------------------------------------
     @staticmethod
@@ -618,6 +655,7 @@ def get_profile(account: str | None = None) -> list[dict]:
                     "name": (p.get("name") or {}).get("fullName"),
                     "email": p.get("emailAddress"),
                     "verified_teacher": p.get("verifiedTeacher", False),
+                    "upload_to_drive": a.can_upload,
                 }
             )
         except Exception as e:  # noqa: BLE001
@@ -956,6 +994,89 @@ def download_assignment_files(
 
 
 # --------------------------------------------------------------------------- #
+# Subida a Drive
+# --------------------------------------------------------------------------- #
+def _q(value: str) -> str:
+    """Escapa un literal para una consulta de la API de Drive."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _ensure_folder(a: Account, name: str, parent_id: str | None = None) -> str:
+    """Id de la carpeta `name` dentro de `parent_id` (o de la raíz); la crea si no existe."""
+    parent = parent_id or "root"
+    q = f"name = '{_q(name)}' and mimeType = '{FOLDER_MIME}' and trashed = false and '{parent}' in parents"
+    resp = a.drive.files().list(q=q, fields="files(id,name)", spaces="drive", pageSize=1).execute()
+    found = resp.get("files") or []
+    if found:
+        return found[0]["id"]
+    body: dict[str, Any] = {"name": name, "mimeType": FOLDER_MIME}
+    if parent_id:
+        body["parents"] = [parent_id]
+    return a.drive.files().create(body=body, fields="id").execute()["id"]
+
+
+def _resolve_folder(a: Account, folder: str | None) -> tuple[str, str]:
+    """(id, descripción) de la carpeta destino: un id/URL de Drive, o un nombre de
+    subcarpeta dentro de "Entregas Classroom" (por default, esa misma)."""
+    if folder and (folder.startswith("http") or re.fullmatch(r"[A-Za-z0-9_-]{20,}", folder)):
+        fid = _drive_id(folder)
+        return fid, f"https://drive.google.com/drive/folders/{fid}"
+    root = _ensure_folder(a, UPLOAD_FOLDER)
+    if not folder:
+        return root, UPLOAD_FOLDER
+    sub = _safe_filename(folder)
+    return _ensure_folder(a, sub, root), f"{UPLOAD_FOLDER}/{sub}"
+
+
+def _upload_to_drive(a: Account, path: Path, folder_id: str, name: str | None = None) -> dict:
+    import mimetypes
+
+    from googleapiclient.http import MediaFileUpload
+
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    body = {"name": _safe_filename(name or path.name), "parents": [folder_id]}
+    media = MediaFileUpload(str(path), mimetype=mime, resumable=path.stat().st_size > 5 * 1024 * 1024)
+    f = a.drive.files().create(body=body, media_body=media, fields="id,name,mimeType,size,webViewLink").execute()
+    return {
+        "drive_id": f["id"],
+        "title": f.get("name"),
+        "mime_type": f.get("mimeType"),
+        "size": int(f.get("size") or path.stat().st_size),
+        "url": f.get("webViewLink"),
+        "local_path": str(path),
+    }
+
+
+def _local_file(path: str) -> Path:
+    p = Path(path).expanduser()
+    if not p.is_file():
+        raise ClassroomError(f"No existe el archivo {p}")
+    return p
+
+
+ATTACH_IN_WEB = (
+    "Los archivos ya están en tu Drive. En Classroom abre la tarea, dale a 'Agregar o crear' > "
+    "'Google Drive', elígelos (aparecen en Recientes) y da 'Entregar'."
+)
+
+
+@mcp.tool()
+@_tool
+def upload_file(path: str, folder: str | None = None, name: str | None = None, account: str | None = None) -> dict:
+    """Sube un archivo local a la carpeta "Entregas Classroom" de tu Drive (o a la
+    subcarpeta `folder`, por ejemplo el nombre del curso; también acepta un id o URL de
+    carpeta de Drive) y devuelve su drive_id y url. Con ellos puedes llamar a
+    submit_assignment(drive_ids=[...]) o adjuntarlo desde la web de Classroom. Requiere
+    haber autorizado la cuenta con el permiso de subir archivos (drive.file). Úsala solo
+    cuando el usuario lo pida explícitamente."""
+    p = _local_file(path)
+    a = accounts.resolve(account)
+    a.require_upload()
+    folder_id, where = _resolve_folder(a, folder)
+    return {"account": a.alias, "folder": where, **_upload_to_drive(a, p, folder_id, name)}
+
+
+# --------------------------------------------------------------------------- #
 # Herramientas de entrega
 # --------------------------------------------------------------------------- #
 @mcp.tool()
@@ -963,25 +1084,30 @@ def download_assignment_files(
 def submit_assignment(
     coursework_id_or_url: str,
     course_id: str | None = None,
+    files: list[str] | None = None,
     drive_ids: list[str] | None = None,
     links: list[str] | None = None,
     turn_in: bool = False,
     account: str | None = None,
 ) -> dict:
-    """Adjunta archivos de Drive (ids o URLs de Drive) y/o enlaces a tu entrega de una
-    tarea y, si turn_in=True, la entrega. Para subir un archivo local a Drive primero usa
-    el servidor MCP de Google Drive y pasa aquí su id. Úsala solo cuando el usuario lo
-    pida explícitamente.
+    """Entrega una tarea: sube los archivos locales de `files` a tu Drive (carpeta
+    "Entregas Classroom/<curso>"), adjunta esos y los de `drive_ids` (ids o URLs de Drive)
+    y/o `links` a tu entrega y, si turn_in=True, la entrega. Úsala solo cuando el usuario
+    lo pida explícitamente.
 
-    Aviso: Google solo permite adjuntar y entregar desde la app que creó la tarea. Si el
-    profesor la creó desde la web de Classroom, este paso devuelve 403
-    @ProjectPermissionDenied y hay que adjuntar desde classroom.google.com."""
+    Aviso: Google solo permite adjuntar y entregar por API desde la app que creó la tarea.
+    Si el profesor la creó desde la web de Classroom (lo normal), adjuntar devuelve 403
+    @ProjectPermissionDenied; los archivos de `files` ya quedaron en Drive y el resultado
+    trae en next_step cómo terminar desde classroom.google.com."""
     from googleapiclient.errors import HttpError
 
-    if not (drive_ids or links or turn_in):
-        raise ClassroomError("Indica drive_ids, links o turn_in=True.")
+    if not (files or drive_ids or links or turn_in):
+        raise ClassroomError("Indica files, drive_ids, links o turn_in=True.")
+    paths = [_local_file(f) for f in files or []]
     course_id, coursework_id, _ = _locate_coursework(coursework_id_or_url, course_id)
     a = accounts.resolve(account, course_id)
+    if paths:
+        a.require_upload()
 
     subs = a.my_submissions(course_id, coursework_id)
     if not subs:
@@ -989,7 +1115,16 @@ def submit_assignment(
     sub = subs[0]
     result: dict[str, Any] = {"account": a.alias, "course_id": course_id, "coursework_id": coursework_id}
 
-    attachments = [{"driveFile": {"id": _drive_id(d)}} for d in drive_ids or []]
+    uploaded: list[dict] = []
+    if paths:
+        course_name = (a.classroom.courses().get(id=course_id).execute() or {}).get("name") or course_id
+        folder_id, where = _resolve_folder(a, course_name)
+        uploaded = [_upload_to_drive(a, p, folder_id) for p in paths]
+        result["uploaded"] = uploaded
+        result["drive_folder"] = where
+
+    attachments = [{"driveFile": {"id": u["drive_id"]}} for u in uploaded]
+    attachments += [{"driveFile": {"id": _drive_id(d)}} for d in drive_ids or []]
     attachments += [{"link": {"url": url}} for url in links or []]
 
     api = a.classroom.courses().courseWork().studentSubmissions()
@@ -1002,6 +1137,8 @@ def submit_assignment(
         except HttpError as e:
             result["attached"] = False
             result["attach_error"] = _http_error_message(e)
+            if uploaded:
+                result["next_step"] = ATTACH_IN_WEB
 
     if turn_in and result.get("attached", True):
         try:
@@ -1106,7 +1243,10 @@ def _setup(argv: list[str]) -> int:
     if existing:
         print("Cuentas ya configuradas: " + ", ".join(repr(accounts.get(a)) for a in existing))
         print("Vas a agregar otra (o renovar una). En el navegador elige la cuenta de Google correspondiente.\n")
-    print("Se va a abrir el navegador para que autorices el acceso a Classroom y la lectura de tus archivos de Drive.")
+    print(
+        "Se va a abrir el navegador para que autorices el acceso a Classroom, la lectura de tus archivos "
+        "de Drive y subir tus entregas a Drive."
+    )
     print("Si Google dice que la app no está verificada, elige 'Continuar' (la app es tuya).\n")
     flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_FILE), SCOPES)
     # Con --hint, Google va directo a esa cuenta (o pide iniciar sesión con ella). Sin hint,

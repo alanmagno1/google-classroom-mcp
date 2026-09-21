@@ -7,17 +7,17 @@ fechas de entrega, calificaciones y anuncios y, si se lo pides, adjunte archivos
 entregue una tarea.
 
 Usa la API oficial de Google Classroom con OAuth de tu propia cuenta. Pide permisos de
-Classroom y de solo lectura de Drive: con eso baja a tu disco los archivos adjuntos a
-tareas, materiales y anuncios (los Docs, Sheets y Slides de Google se exportan a PDF,
-xlsx, etc.). Para subir un archivo local a Drive y adjuntarlo a una entrega se usa el
-[servidor MCP oficial de Google Drive](https://developers.google.com/workspace/guides/configure-mcp-servers),
-que en Claude se conecta con un clic.
+Classroom y de Drive: solo lectura para bajar a tu disco los adjuntos de tareas,
+materiales y anuncios (los Docs, Sheets y Slides de Google se exportan a PDF, xlsx,
+etc.), y `drive.file` para subir tus entregas a una carpeta "Entregas Classroom" de tu
+Drive (con ese permiso el servidor solo ve los archivos que él mismo sube).
 
 > **Sobre las entregas.** La API de Google solo permite adjuntar archivos y entregar
 > desde la misma aplicación que creó la tarea. Si tu profesor la creó desde la web de
-> Classroom (lo normal), `submit_assignment` devuelve `403 @ProjectPermissionDenied` y
-> hay que adjuntar desde classroom.google.com. Es una restricción de Google, no del
-> servidor.
+> Classroom (lo normal), adjuntar devuelve `403 @ProjectPermissionDenied`. Es una
+> restricción de Google, no del servidor. Por eso `submit_assignment(files=[...])` sube
+> primero tus archivos a Drive: cuando Google rechaza el adjunto, ya están ahí y en
+> Classroom solo haces "Agregar o crear" > "Google Drive", los eliges y das "Entregar".
 
 ## Requisitos
 
@@ -73,6 +73,8 @@ Listo. Abre Claude Code y pídele, por ejemplo:
 
 > Bájame los archivos de la práctica 3 de Minería y resume qué hay que hacer.
 
+> Entrega ~/Documents/practica3.ipynb en la práctica 3 de Minería.
+
 ### Otros clientes (Claude Desktop, Cursor, etc.)
 
 ```json
@@ -123,7 +125,8 @@ ids en las URLs de Classroom van en base64 y el servidor los decodifica solo.
 | `list_announcements(course_id, limit?)` | Anuncios del tablón, del más reciente al más antiguo. |
 | `download_assignment_files(coursework_id_or_url, course_id?, dest_dir?, include_submission?, export_format?)` | Baja todos los adjuntos de Drive de una tarea o material a `~/Downloads/google-classroom-mcp/<curso>/<tarea>/`. Con `include_submission=True` baja también los archivos de tu entrega. Enlaces, videos y formularios se devuelven con su URL. |
 | `download_file(file_id_or_url, filename?, dest_dir?, export_format?)` | Baja un solo archivo de Drive (el `drive_id` o `url` que devuelven las demás herramientas) y devuelve la ruta local. |
-| `submit_assignment(coursework_id_or_url, course_id?, drive_ids?, links?, turn_in?)` | Adjunta archivos de Drive (ids o URLs) y/o enlaces a tu entrega y si `turn_in=True` la entrega. Ver el aviso de arriba. |
+| `upload_file(path, folder?, name?)` | Sube un archivo local a `Entregas Classroom/` en tu Drive (o a la subcarpeta `folder`, o a un id/URL de carpeta) y devuelve su `drive_id` y `url`. |
+| `submit_assignment(coursework_id_or_url, course_id?, files?, drive_ids?, links?, turn_in?)` | Sube los archivos locales de `files` a `Entregas Classroom/<curso>/`, adjunta esos, los de `drive_ids` y/o `links` a tu entrega y si `turn_in=True` la entrega. Si Google rechaza el adjunto, devuelve en `next_step` cómo terminar desde la web. Ver el aviso de arriba. |
 | `reclaim_submission(coursework_id_or_url, course_id?)` | Anula una entrega ya enviada para poder modificarla. Misma restricción. |
 
 Los archivos nativos de Google no tienen un binario que bajar, así que se exportan:
@@ -131,8 +134,9 @@ Docs y Slides a `pdf`, Sheets a `xlsx`, dibujos a `png`. Con `export_format` pue
 otro (`docx`, `txt`, `md`, `html`, `csv`, `pptx`...). `dest_dir` acepta una ruta absoluta o
 una carpeta relativa a la de descargas.
 
-Para subir un archivo local a Drive usa el servidor MCP de Google Drive y pasa el id
-resultante a `submit_assignment(drive_ids=[...])`.
+`upload_file` y `submit_assignment(files=...)` necesitan que la cuenta se haya autorizado
+con el permiso `drive.file`. Si la autorizaste con una versión anterior, esas dos
+herramientas te dirán qué comando correr; todo lo demás sigue funcionando sin él.
 
 ## Comandos
 
@@ -148,14 +152,16 @@ google-classroom-mcp                                           # arranca el serv
 
 Classroom: lectura de cursos, materiales, anuncios, temas, lista del curso (para leer tu
 perfil) y correo del perfil, y lectura y escritura de tu propio trabajo de clase y tus
-entregas (`classroom.coursework.me`). Drive: solo lectura (`drive.readonly`), para bajar
-los adjuntos; el servidor nunca crea, modifica ni borra nada en Drive. Nada se envía a
-ningún servidor que no sea Google. `submit_assignment` y `reclaim_submission` modifican
-tu entrega: Claude solo debe usarlas cuando se lo pidas explícitamente.
+entregas (`classroom.coursework.me`). Drive: solo lectura (`drive.readonly`) para bajar
+los adjuntos, y `drive.file` para subir tus entregas; con este último el servidor solo
+puede ver y tocar los archivos que él mismo creó, nunca el resto de tu Drive, y no borra
+nada. Nada se envía a ningún servidor que no sea Google. `upload_file`,
+`submit_assignment` y `reclaim_submission` crean archivos o modifican tu entrega: Claude
+solo debe usarlas cuando se lo pidas explícitamente.
 
-Si ya tenías cuentas autorizadas con una versión anterior (sin Drive), el servidor te
-pedirá volver a correr `google-classroom-mcp setup --as <alias>` para renovar el token
-con el permiso nuevo.
+Si ya tenías cuentas autorizadas con una versión anterior, siguen funcionando para todo
+menos para subir; para eso vuelve a correr `google-classroom-mcp setup --as <alias>
+--hint <correo>` una vez por cuenta.
 
 ## Desarrollo
 
