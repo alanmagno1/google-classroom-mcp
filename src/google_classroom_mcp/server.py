@@ -4,9 +4,10 @@ Expone herramientas para consultar cursos, tareas y materiales, el estado de tus
 entregas y calificaciones, anuncios, y para entregar tareas (adjuntar archivos de
 Drive o enlaces a la entrega, entregar y retirar la entrega).
 
-Solo pide permisos de Classroom. Los archivos (bajar materiales, subir tu tarea a
-Drive) se manejan con el servidor MCP oficial de Google Drive; aquí solo se
-referencian por id o enlace.
+Pide permisos de Classroom y lectura de Drive: los adjuntos de tareas, materiales y
+anuncios se pueden bajar al disco con download_file / download_assignment_files (los
+Docs, Sheets y Slides de Google se exportan a PDF, xlsx, etc.). Subir un archivo local a
+Drive para una entrega se hace con el servidor MCP oficial de Google Drive.
 
 Varias cuentas: corre `setup` una vez por cuenta de Google. Cada herramienta acepta
 un parámetro `account` opcional (alias o correo). Si lo omites y hay una sola cuenta
@@ -21,6 +22,7 @@ hacerla desde la web.
 Configuración:
   ~/.config/google-classroom-mcp/client_secret.json      credenciales OAuth (Google Cloud Console)
   ~/.config/google-classroom-mcp/accounts/<alias>.json   token de cada cuenta (lo genera `setup`)
+  ~/Downloads/google-classroom-mcp/                      descargas (GOOGLE_CLASSROOM_DOWNLOAD_DIR)
 
 Comandos:
   google-classroom-mcp                                   arranca el servidor MCP (stdio)
@@ -52,6 +54,7 @@ CONFIG_DIR = Path(
 )
 CLIENT_SECRET_FILE = Path(os.environ.get("GOOGLE_CLASSROOM_CLIENT_SECRET", CONFIG_DIR / "client_secret.json"))
 ACCOUNTS_DIR = CONFIG_DIR / "accounts"
+DOWNLOAD_DIR = Path(os.environ.get("GOOGLE_CLASSROOM_DOWNLOAD_DIR", Path.home() / "Downloads" / "google-classroom-mcp"))
 
 SCOPES = [
     "https://www.googleapis.com/auth/classroom.courses.readonly",
@@ -61,7 +64,40 @@ SCOPES = [
     "https://www.googleapis.com/auth/classroom.topics.readonly",
     "https://www.googleapis.com/auth/classroom.rosters.readonly",
     "https://www.googleapis.com/auth/classroom.profile.emails",
+    # Solo lectura de Drive: para bajar los adjuntos (Google no los sirve por la API de Classroom).
+    "https://www.googleapis.com/auth/drive.readonly",
 ]
+
+# Archivos nativos de Google (Docs, Sheets, Slides...) no tienen binario: se exportan.
+GOOGLE_APPS_PREFIX = "application/vnd.google-apps."
+EXPORT_MIME = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "odt": "application/vnd.oasis.opendocument.text",
+    "rtf": "application/rtf",
+    "txt": "text/plain",
+    "md": "text/markdown",
+    "html": "text/html",
+    "epub": "application/epub+zip",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "ods": "application/vnd.oasis.opendocument.spreadsheet",
+    "csv": "text/csv",
+    "tsv": "text/tab-separated-values",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "odp": "application/vnd.oasis.opendocument.presentation",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "svg": "image/svg+xml",
+    "json": "application/vnd.google-apps.script+json",
+}
+DEFAULT_EXPORT = {
+    "document": "pdf",
+    "presentation": "pdf",
+    "spreadsheet": "xlsx",
+    "drawing": "png",
+    "script": "json",
+    "jam": "pdf",
+}
 
 PENDING_STATES = ("NEW", "CREATED", "RECLAIMED_BY_STUDENT")
 
@@ -78,9 +114,11 @@ mcp = MCPServer(
         "tareas faltan usa list_pending_assignments (revisa todas las cuentas). Para una URL como "
         "classroom.google.com/c/XXX/a/YYY/details usa get_assignment con la URL completa. El "
         "parámetro account (alias o correo) es opcional; si hay varias cuentas y una herramienta "
-        "no puede deducir la cuenta, te lo dirá. Los materiales y entregas traen drive_id y url: "
-        "para leer o subir archivos usa el servidor MCP de Google Drive. submit_assignment y "
-        "reclaim_submission modifican la entrega: úsalas solo cuando el usuario lo pida explícitamente."
+        "no puede deducir la cuenta, te lo dirá. Para bajar los adjuntos de una tarea usa "
+        "download_assignment_files (o download_file con un drive_id o URL de Drive); devuelven rutas "
+        "locales que puedes leer con Read. Para subir un archivo local a Drive usa el servidor MCP de "
+        "Google Drive. submit_assignment y reclaim_submission modifican la entrega: úsalas solo cuando "
+        "el usuario lo pida explícitamente."
     ),
 )
 
@@ -198,7 +236,16 @@ def _http_error_message(e: Exception) -> str:
         msg = f"{msg}. {PROJECT_PERMISSION_HINT}"
     elif e.resp.status == 403 and "insufficient" in msg.lower():
         msg += " (vuelve a correr `google-classroom-mcp setup` para renovar los permisos de esa cuenta)"
+    elif e.resp.status == 403 and "has not been used in project" in msg:
+        msg += (
+            " (habilita esa API en Google Cloud: APIs y servicios > Biblioteca, en el mismo proyecto del client secret)"
+        )
     return f"Error de la API de Google [{status}]: {msg}"
+
+
+def _safe_filename(name: str, fallback: str = "archivo") -> str:
+    name = re.sub(r"[\\/\x00-\x1f]+", "_", (name or "").strip()).strip(". ")
+    return name or fallback
 
 
 def _materials(mats: list[dict] | None) -> list[dict] | None:
@@ -305,6 +352,7 @@ class Account:
         self.name: str | None = meta.get("name")
         self._creds = None
         self._classroom = None
+        self._drive = None
         self._profile: dict | None = None
 
     def __repr__(self) -> str:
@@ -366,6 +414,14 @@ class Account:
             self._classroom = build("classroom", "v1", credentials=self.creds, cache_discovery=False)
         return self._classroom
 
+    @property
+    def drive(self):
+        if self._drive is None:
+            from googleapiclient.discovery import build
+
+            self._drive = build("drive", "v3", credentials=self.creds, cache_discovery=False)
+        return self._drive
+
     # --- helpers -----------------------------------------------------------
     @staticmethod
     def paged(request_fn, key: str, **params: Any) -> list[dict]:
@@ -403,6 +459,21 @@ class Account:
         except HttpError as e:
             if e.resp.status in (403, 404):
                 return False
+            raise
+
+    def drive_file(self, file_id: str) -> dict | None:
+        """Metadatos de un archivo de Drive, o None si esta cuenta no lo ve."""
+        from googleapiclient.errors import HttpError
+
+        try:
+            return (
+                self.drive.files()
+                .get(fileId=file_id, fields="id,name,mimeType,size,shortcutDetails", supportsAllDrives=True)
+                .execute()
+            )
+        except HttpError as e:
+            if e.resp.status == 404:
+                return None
             raise
 
 
@@ -475,6 +546,16 @@ class Accounts:
     def selection(self, account: str | None) -> list[Account]:
         """Para herramientas que pueden recorrer todas las cuentas."""
         return [self.find(account)] if account else self.all()
+
+    def resolve_drive_file(self, account: str | None, file_id: str) -> tuple[Account, dict]:
+        """Cuenta que ve el archivo de Drive y sus metadatos."""
+        candidates = [self.find(account)] if account else self.all()
+        for a in candidates:
+            meta = a.drive_file(file_id)
+            if meta is not None:
+                return a, meta
+        who = repr(candidates[0]) if len(candidates) == 1 else ", ".join(repr(a) for a in candidates)
+        raise ClassroomError(f"El archivo de Drive {file_id} no existe o la cuenta no tiene acceso ({who}).")
 
     def reset(self) -> None:
         self._cache.clear()
@@ -714,6 +795,162 @@ def list_announcements(course_id: str, limit: int = 20, account: str | None = No
 
 
 # --------------------------------------------------------------------------- #
+# Herramientas de descarga
+# --------------------------------------------------------------------------- #
+def _dest_folder(dest_dir: str | None, default: Path) -> Path:
+    if not dest_dir:
+        return default
+    p = Path(dest_dir).expanduser()
+    return p if p.is_absolute() else DOWNLOAD_DIR / p
+
+
+def _download_drive_file(
+    a: Account, meta: dict, dest_dir: Path, filename: str | None = None, export_format: str | None = None
+) -> dict:
+    """Baja un archivo de Drive al disco. Los archivos nativos de Google se exportan."""
+    from googleapiclient.http import MediaIoBaseDownload
+
+    file_id = meta["id"]
+    mime = meta.get("mimeType") or ""
+    name = _safe_filename(filename or meta.get("name") or file_id)
+    exported: str | None = None
+
+    if mime.startswith(GOOGLE_APPS_PREFIX):
+        kind = mime[len(GOOGLE_APPS_PREFIX) :]
+        if kind == "shortcut":
+            target = (meta.get("shortcutDetails") or {}).get("targetId")
+            target_meta = a.drive_file(target) if target else None
+            if target_meta is None:
+                raise ClassroomError(f"'{meta.get('name')}' es un atajo de Drive y no puedo ver el archivo al que apunta.")
+            return _download_drive_file(a, target_meta, dest_dir, filename, export_format)
+        if kind in ("folder", "form", "site", "map", "fusiontable"):
+            raise ClassroomError(
+                f"'{meta.get('name')}' es un {kind} de Google y no se descarga como archivo. "
+                f"Ábrelo en https://drive.google.com/open?id={file_id}"
+            )
+        fmt = (export_format or DEFAULT_EXPORT.get(kind, "pdf")).lower().lstrip(".")
+        if fmt not in EXPORT_MIME:
+            raise ClassroomError(f"Formato de exportación desconocido: {fmt}. Opciones: {', '.join(EXPORT_MIME)}")
+        if not name.lower().endswith(f".{fmt}"):
+            name = f"{name}.{fmt}"
+        request = a.drive.files().export_media(fileId=file_id, mimeType=EXPORT_MIME[fmt])
+        exported = fmt
+    else:
+        request = a.drive.files().get_media(fileId=file_id, supportsAllDrives=True)
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / name
+    try:
+        with open(dest, "wb") as fh:
+            downloader = MediaIoBaseDownload(fh, request, chunksize=8 * 1024 * 1024)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk(num_retries=3)
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
+
+    out: dict[str, Any] = {
+        "path": str(dest),
+        "title": meta.get("name"),
+        "mime_type": mime,
+        "size": dest.stat().st_size,
+        "drive_id": file_id,
+    }
+    if exported:
+        out["exported_as"] = exported
+    return out
+
+
+@mcp.tool()
+@_tool
+def download_file(
+    file_id_or_url: str,
+    filename: str | None = None,
+    dest_dir: str | None = None,
+    export_format: str | None = None,
+    account: str | None = None,
+) -> dict:
+    """Descarga un archivo de Drive (el drive_id o la url que devuelven las demás
+    herramientas) a ~/Downloads/google-classroom-mcp/ (o a dest_dir) y devuelve la ruta
+    local; luego puedes leerlo con Read. Los Docs, Sheets y Slides de Google no tienen
+    archivo propio y se exportan: Docs y Slides a pdf, Sheets a xlsx, dibujos a png;
+    export_format lo cambia (pdf, docx, txt, md, html, xlsx, csv, pptx, png...). Sin
+    account prueba con todas las cuentas hasta dar con la que ve el archivo."""
+    file_id = _drive_id(file_id_or_url)
+    a, meta = accounts.resolve_drive_file(account, file_id)
+    folder = _dest_folder(dest_dir, DOWNLOAD_DIR)
+    return {"account": a.alias, **_download_drive_file(a, meta, folder, filename, export_format)}
+
+
+@mcp.tool()
+@_tool
+def download_assignment_files(
+    coursework_id_or_url: str,
+    course_id: str | None = None,
+    dest_dir: str | None = None,
+    include_submission: bool = False,
+    export_format: str | None = None,
+    account: str | None = None,
+) -> dict:
+    """Descarga todos los adjuntos de Drive de una tarea o material (acepta la URL
+    completa de Classroom o el id junto con course_id) a una carpeta con el nombre de la
+    tarea dentro de ~/Downloads/google-classroom-mcp/ (o a dest_dir). Con
+    include_submission=True baja también los archivos de tu propia entrega. Los enlaces,
+    videos de YouTube y formularios no se descargan: vienen en not_downloadable con su url.
+    Los archivos de Google se exportan igual que en download_file."""
+    course_id, coursework_id, ids = _locate_coursework(coursework_id_or_url, course_id)
+    a = accounts.resolve(account, course_id)
+    is_material = "material_id" in ids and "coursework_id" not in ids
+    if is_material:
+        item = a.classroom.courses().courseWorkMaterials().get(courseId=course_id, id=ids["material_id"]).execute()
+    else:
+        item = a.classroom.courses().courseWork().get(courseId=course_id, id=coursework_id).execute()
+
+    mats = [dict(m, source="assignment") for m in _materials(item.get("materials")) or []]
+    if include_submission and not is_material:
+        subs = a.my_submissions(course_id, coursework_id)
+        sub = _submission(subs[0]) if subs else None
+        mats += [dict(m, source="submission") for m in (sub or {}).get("attachments") or []]
+
+    folder = _dest_folder(dest_dir, DOWNLOAD_DIR / _safe_filename(item.get("title") or coursework_id))
+    files: list[dict] = []
+    skipped: list[dict] = []
+    for m in mats:
+        if m.get("type") != "drive" or not m.get("drive_id"):
+            skipped.append(m)
+            continue
+        try:
+            meta = a.drive_file(m["drive_id"])
+            if meta is None:
+                raise ClassroomError("la cuenta no tiene acceso a este archivo en Drive")
+            files.append({**_download_drive_file(a, meta, folder, None, export_format), "source": m["source"]})
+        except Exception as e:  # noqa: BLE001
+            files.append(
+                {
+                    "drive_id": m["drive_id"],
+                    "title": m.get("title"),
+                    "url": m.get("url"),
+                    "source": m["source"],
+                    "error": str(e) if isinstance(e, ClassroomError) else _http_error_message(e),
+                }
+            )
+
+    return {
+        "account": a.alias,
+        "course_id": course_id,
+        "id": item.get("id"),
+        "title": item.get("title"),
+        "url": item.get("alternateLink"),
+        "folder": str(folder),
+        "downloaded": sum(1 for f in files if "path" in f),
+        "failed": sum(1 for f in files if "error" in f),
+        "files": files,
+        "not_downloadable": skipped or None,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Herramientas de entrega
 # --------------------------------------------------------------------------- #
 @mcp.tool()
@@ -800,7 +1037,8 @@ CLOUD_INSTRUCTIONS = f"""\
 Necesitas un client secret de OAuth de Google Cloud (es gratis, 5 minutos):
 
   1. Entra a https://console.cloud.google.com y crea un proyecto (p. ej. "classroom-mcp").
-  2. APIs y servicios > Biblioteca: habilita "Google Classroom API".
+  2. APIs y servicios > Biblioteca: habilita "Google Classroom API" y "Google Drive API"
+     (Drive es para poder bajar los archivos adjuntos).
   3. APIs y servicios > Pantalla de consentimiento de OAuth (o "Google Auth Platform"):
      tipo de usuario Externo, llena nombre y correo, y en "Usuarios de prueba"
      agrega TODAS las cuentas de Google con las que entras a Classroom.
@@ -857,7 +1095,7 @@ def _setup(argv: list[str]) -> int:
     if existing:
         print("Cuentas ya configuradas: " + ", ".join(repr(accounts.get(a)) for a in existing))
         print("Vas a agregar otra (o renovar una). En el navegador elige la cuenta de Google correspondiente.\n")
-    print("Se va a abrir el navegador para que autorices el acceso a Classroom.")
+    print("Se va a abrir el navegador para que autorices el acceso a Classroom y la lectura de tus archivos de Drive.")
     print("Si Google dice que la app no está verificada, elige 'Continuar' (la app es tuya).\n")
     flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_FILE), SCOPES)
     creds = flow.run_local_server(port=0, prompt="consent")
