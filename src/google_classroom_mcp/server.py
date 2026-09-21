@@ -1098,7 +1098,9 @@ def _setup(argv: list[str]) -> int:
     print("Se va a abrir el navegador para que autorices el acceso a Classroom y la lectura de tus archivos de Drive.")
     print("Si Google dice que la app no está verificada, elige 'Continuar' (la app es tuya).\n")
     flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_FILE), SCOPES)
-    creds = flow.run_local_server(port=0, prompt="consent")
+    # select_account: que Google siempre muestre el selector, aunque solo haya una sesión
+    # abierta en el navegador; si no, con varias cuentas autoriza la equivocada sin preguntar.
+    creds = flow.run_local_server(port=0, prompt="select_account consent")
 
     # Identificar la cuenta para nombrar el archivo.
     from googleapiclient.discovery import build
