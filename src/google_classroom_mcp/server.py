@@ -26,7 +26,9 @@ Configuración:
 
 Comandos:
   google-classroom-mcp                                   arranca el servidor MCP (stdio)
-  google-classroom-mcp setup [client.json] [--as ALIAS]  guarda el client secret y autoriza una cuenta
+  google-classroom-mcp setup [client.json] [--as ALIAS] [--hint CORREO]
+                                                         guarda el client secret y autoriza una cuenta
+                                                         (--hint: exige que sea ese correo)
   google-classroom-mcp accounts                          lista las cuentas configuradas
   google-classroom-mcp remove ALIAS                      quita una cuenta
   google-classroom-mcp check                             verifica la conexión de todas las cuentas
@@ -1064,11 +1066,15 @@ def _print_registration() -> None:
 def _setup(argv: list[str]) -> int:
     """Guarda el client secret, abre el navegador para autorizar una cuenta y guarda su token."""
     alias_opt: str | None = None
+    hint: str | None = None
     rest: list[str] = []
     i = 0
     while i < len(argv):
         if argv[i] in ("--as", "--alias") and i + 1 < len(argv):
             alias_opt = argv[i + 1]
+            i += 2
+        elif argv[i] in ("--hint", "--email") and i + 1 < len(argv):
+            hint = argv[i + 1].strip()
             i += 2
         else:
             rest.append(argv[i])
@@ -1098,9 +1104,14 @@ def _setup(argv: list[str]) -> int:
     print("Se va a abrir el navegador para que autorices el acceso a Classroom y la lectura de tus archivos de Drive.")
     print("Si Google dice que la app no está verificada, elige 'Continuar' (la app es tuya).\n")
     flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_FILE), SCOPES)
-    # select_account: que Google siempre muestre el selector, aunque solo haya una sesión
-    # abierta en el navegador; si no, con varias cuentas autoriza la equivocada sin preguntar.
-    creds = flow.run_local_server(port=0, prompt="select_account consent")
+    # Con --hint, Google va directo a esa cuenta (o pide iniciar sesión con ella). Sin hint,
+    # select_account obliga a mostrar el selector aunque solo haya una sesión abierta; si no,
+    # con varias cuentas Google autoriza la que está abierta sin preguntar.
+    if hint:
+        print(f"Cuenta esperada: {hint}")
+        creds = flow.run_local_server(port=0, prompt="consent", login_hint=hint)
+    else:
+        creds = flow.run_local_server(port=0, prompt="select_account consent")
 
     # Identificar la cuenta para nombrar el archivo.
     from googleapiclient.discovery import build
@@ -1108,6 +1119,13 @@ def _setup(argv: list[str]) -> int:
     profile = build("classroom", "v1", credentials=creds, cache_discovery=False).userProfiles().get(userId="me").execute()
     email = profile.get("emailAddress") or profile.get("id")
     name = (profile.get("name") or {}).get("fullName")
+    if hint and (email or "").lower() != hint.lower():
+        print(
+            f"\nAutorizaste con {email}, pero pediste {hint}. No guardo nada.\n"
+            "Vuelve a correr setup y en el navegador elige esa cuenta (o 'Usar otra cuenta' e inicia sesión con ella).",
+            file=sys.stderr,
+        )
+        return 1
     alias = _safe_alias(alias_opt or email)
 
     # Si esta cuenta ya estaba con otro alias, actualizar ese archivo en vez de duplicar.

@@ -51,7 +51,9 @@ Si Google avisa que la app no está verificada, elige "Continuar": la app es tuy
 
 **¿Otra cuenta?** Vuelve a correr `setup` (ya sin el JSON) y en el navegador elige la
 otra cuenta de Google. Por default cada cuenta se guarda con su correo como alias; si
-prefieres un nombre corto usa `setup --as unam`.
+prefieres un nombre corto usa `setup --as unam`. Con `--hint tu@correo.unam.mx` Google va
+directo a esa cuenta y el setup se niega a guardar si autorizas con otra (útil cuando el
+navegador tiene abierta solo la cuenta equivocada).
 
 **3. Registra el servidor en Claude Code:**
 
@@ -131,7 +133,7 @@ resultante a `submit_assignment(drive_ids=[...])`.
 ## Comandos
 
 ```bash
-google-classroom-mcp setup [client_secret.json] [--as ALIAS]   # guarda el client secret y autoriza una cuenta
+google-classroom-mcp setup [client_secret.json] [--as ALIAS] [--hint CORREO]   # guarda el client secret y autoriza una cuenta
 google-classroom-mcp accounts                                  # lista las cuentas configuradas
 google-classroom-mcp remove ALIAS                              # quita una cuenta
 google-classroom-mcp check                                     # verifica la conexión de todas las cuentas
