@@ -896,8 +896,8 @@ def download_assignment_files(
     account: str | None = None,
 ) -> dict:
     """Descarga todos los adjuntos de Drive de una tarea o material (acepta la URL
-    completa de Classroom o el id junto con course_id) a una carpeta con el nombre de la
-    tarea dentro de ~/Downloads/google-classroom-mcp/ (o a dest_dir). Con
+    completa de Classroom o el id junto con course_id) a
+    ~/Downloads/google-classroom-mcp/<curso>/<tarea>/ (o a dest_dir). Con
     include_submission=True baja también los archivos de tu propia entrega. Los enlaces,
     videos de YouTube y formularios no se descargan: vienen en not_downloadable con su url.
     Los archivos de Google se exportan igual que en download_file."""
@@ -915,7 +915,10 @@ def download_assignment_files(
         sub = _submission(subs[0]) if subs else None
         mats += [dict(m, source="submission") for m in (sub or {}).get("attachments") or []]
 
-    folder = _dest_folder(dest_dir, DOWNLOAD_DIR / _safe_filename(item.get("title") or coursework_id))
+    course_name = (a.classroom.courses().get(id=course_id).execute() or {}).get("name") or course_id
+    folder = _dest_folder(
+        dest_dir, DOWNLOAD_DIR / _safe_filename(course_name) / _safe_filename(item.get("title") or coursework_id)
+    )
     files: list[dict] = []
     skipped: list[dict] = []
     for m in mats:
