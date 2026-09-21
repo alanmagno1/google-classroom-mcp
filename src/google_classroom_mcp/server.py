@@ -1049,7 +1049,9 @@ Necesitas un client secret de OAuth de Google Cloud (es gratis, 5 minutos):
      agrega TODAS las cuentas de Google con las que entras a Classroom.
   4. APIs y servicios > Credenciales > Crear credenciales > ID de cliente de OAuth:
      tipo de aplicación "Aplicación de escritorio". Descarga el JSON.
-  5. Vuelve a correr:  google-classroom-mcp setup ~/Downloads/client_secret_XXXX.json
+  5. Recomendado: en Google Auth Platform > Audiencia dale "Publicar app". En estado
+     "Prueba" Google caduca la autorización cada 7 días.
+  6. Vuelve a correr:  google-classroom-mcp setup ~/Downloads/client_secret_XXXX.json
 
 El archivo se copiará a {CLIENT_SECRET_FILE}. El mismo client secret sirve para todas
 tus cuentas: corre `setup` una vez por cuenta.

@@ -39,6 +39,10 @@ que en Claude se conecta con un clic.
    agrega **todas** las cuentas de Google con las que entras a Classroom.
 4. APIs y servicios > Credenciales > Crear credenciales > **ID de cliente de OAuth**,
    tipo de aplicación **Aplicación de escritorio**. Descarga el JSON.
+5. Recomendado: en Google Auth Platform > **Audiencia**, dale **Publicar app**. Mientras la
+   app esté en estado "Prueba", Google caduca cada autorización a los 7 días y hay que
+   repetir `setup`. En "Producción" la autorización dura indefinidamente; la app sigue
+   siendo tuya y sin verificar, solo verás el aviso de "app no verificada" una vez por cuenta.
 
 **2. Autoriza tu cuenta** (abre el navegador; el token queda en
 `~/.config/google-classroom-mcp/accounts/<alias>.json` con permisos solo para tu usuario):
