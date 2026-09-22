@@ -15,15 +15,17 @@ Drive (con ese permiso el servidor solo ve los archivos que él mismo sube).
 > **Sobre las entregas.** La API de Google solo permite adjuntar archivos y entregar
 > desde la misma aplicación que creó la tarea. Si tu profesor la creó desde la web de
 > Classroom (lo normal), adjuntar devuelve `403 @ProjectPermissionDenied`. Es una
-> restricción de Google, no del servidor. Por eso `submit_assignment(files=[...])` sube
-> primero tus archivos a Drive: cuando Google rechaza el adjunto, ya están ahí y en
-> Classroom solo haces "Agregar o crear" > "Google Drive", los eliges y das "Entregar".
+> restricción de Google, no del servidor. Para esas tareas está `submit_in_browser`:
+> maneja Google Chrome con tu sesión y hace los mismos clics que tú (ver
+> [Entregar por navegador](#entregar-por-navegador)). `submit_assignment(files=[...])`
+> intenta la vía API y, si falla, al menos deja tus archivos en Drive.
 
 ## Requisitos
 
 - [uv](https://docs.astral.sh/uv/) instalado. En macOS: `brew install uv`.
   En cualquier sistema: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
 - Un client secret de OAuth de Google Cloud (gratis, ver abajo).
+- Google Chrome, solo si quieres entregar tareas por navegador.
 - Que tu cuenta de Classroom permita apps de terceros. Si es una cuenta
   institucional, el administrador puede tenerlo bloqueado.
 
@@ -95,6 +97,8 @@ Listo. Abre Claude Code y pídele, por ejemplo:
 | `GOOGLE_CLASSROOM_MCP_CONFIG_DIR` | Carpeta de configuración. Default: `~/.config/google-classroom-mcp` |
 | `GOOGLE_CLASSROOM_CLIENT_SECRET` | Ruta al client secret. Default: `<config>/client_secret.json` |
 | `GOOGLE_CLASSROOM_DOWNLOAD_DIR` | Carpeta de descargas. Default: `~/Downloads/google-classroom-mcp` |
+| `GOOGLE_CLASSROOM_BROWSER_PROFILES` | Carpeta con un perfil de Chrome por cuenta. Default: `<config>/browser-profiles` |
+| `GOOGLE_CLASSROOM_BROWSER_HEADLESS` | `1` para entregar con Chrome oculto. Default: ventana visible |
 
 ### Varias cuentas de Google
 
@@ -125,6 +129,7 @@ ids en las URLs de Classroom van en base64 y el servidor los decodifica solo.
 | `list_announcements(course_id, limit?)` | Anuncios del tablón, del más reciente al más antiguo. |
 | `download_assignment_files(coursework_id_or_url, course_id?, dest_dir?, include_submission?, export_format?)` | Baja todos los adjuntos de Drive de una tarea o material a `~/Downloads/google-classroom-mcp/<curso>/<tarea>/`. Con `include_submission=True` baja también los archivos de tu entrega. Enlaces, videos y formularios se devuelven con su URL. |
 | `download_file(file_id_or_url, filename?, dest_dir?, export_format?)` | Baja un solo archivo de Drive (el `drive_id` o `url` que devuelven las demás herramientas) y devuelve la ruta local. |
+| `submit_in_browser(coursework_id_or_url, files?, course_id?, turn_in?)` | Entrega de verdad, por navegador: abre Chrome con tu sesión, adjunta los archivos locales de `files`, da "Entregar" y verifica por la API que quedó en `TURNED_IN`. Con `turn_in=False` solo adjunta. Requiere `browser-login <alias>` una vez por cuenta. |
 | `upload_file(path, folder?, name?)` | Sube un archivo local a `Entregas Classroom/` en tu Drive (o a la subcarpeta `folder`, o a un id/URL de carpeta) y devuelve su `drive_id` y `url`. |
 | `submit_assignment(coursework_id_or_url, course_id?, files?, drive_ids?, links?, turn_in?)` | Sube los archivos locales de `files` a `Entregas Classroom/<curso>/`, adjunta esos, los de `drive_ids` y/o `links` a tu entrega y si `turn_in=True` la entrega. Si Google rechaza el adjunto, devuelve en `next_step` cómo terminar desde la web. Ver el aviso de arriba. |
 | `reclaim_submission(coursework_id_or_url, course_id?)` | Anula una entrega ya enviada para poder modificarla. Misma restricción. |
@@ -138,6 +143,34 @@ una carpeta relativa a la de descargas.
 con el permiso `drive.file`. Si la autorizaste con una versión anterior, esas dos
 herramientas te dirán qué comando correr; todo lo demás sigue funcionando sin él.
 
+## Entregar por navegador
+
+Como la API rechaza entregar tareas creadas por el profesor, `submit_in_browser` hace la
+entrega igual que tú: con [Playwright](https://playwright.dev/python/) maneja tu Google
+Chrome instalado sobre un perfil aparte, abre la tarea con la cuenta correcta, "Agregar o
+crear" > "Archivo", sube el archivo, "Entregar", y luego confirma por la API que el estado
+cambió a `TURNED_IN`. Si algo falla, deja una captura de pantalla en
+`~/Downloads/google-classroom-mcp/_navegador/`.
+
+Requiere Google Chrome instalado y, por cada cuenta, una sesión iniciada una sola vez en
+un perfil de Chrome propio (una cuenta por perfil; la multisesión de Google no es
+confiable para esto):
+
+```bash
+google-classroom-mcp browser-login unam --email tu@correo.unam.mx   # abre Chrome: inicia sesión y cierra la ventana
+google-classroom-mcp browser-login personal --email tu@gmail.com
+google-classroom-mcp browser-status                                 # sesión de cada perfil
+```
+
+Los perfiles viven en `~/.config/google-classroom-mcp/browser-profiles/<alias>` (variable
+`GOOGLE_CLASSROOM_BROWSER_PROFILES`). Inicia sesión siempre desde `browser-login`: en macOS
+el Chrome que abre Playwright cifra las cookies con una llave distinta a la de tu Chrome
+normal, así que una sesión iniciada fuera no le sirve. Si Google bloquea el inicio de
+sesión en el navegador controlado, `browser-login ALIAS --plain` abre un Chrome sin
+automatizar pero compatible. La ventana de Chrome se ve mientras entrega; con
+`GOOGLE_CLASSROOM_BROWSER_HEADLESS=1` corre oculta. Automatizar la web de Classroom no es
+un uso que Google ofrezca oficialmente; es tu cuenta y tus tareas, pero conviene saberlo.
+
 ## Comandos
 
 ```bash
@@ -145,6 +178,8 @@ google-classroom-mcp setup [client_secret.json] [--as ALIAS] [--hint CORREO]   #
 google-classroom-mcp accounts                                  # lista las cuentas configuradas
 google-classroom-mcp remove ALIAS                              # quita una cuenta
 google-classroom-mcp check                                     # verifica la conexión de todas las cuentas
+google-classroom-mcp browser-login ALIAS [--email CORREO] [--plain]   # inicia sesión en el perfil de Chrome de esa cuenta
+google-classroom-mcp browser-status                            # sesión de cada perfil de navegador
 google-classroom-mcp                                           # arranca el servidor MCP por stdio (lo usa el cliente)
 ```
 

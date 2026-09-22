@@ -17,8 +17,9 @@ demás herramientas ubican la cuenta a partir del curso.
 
 Aviso sobre entregas: la API de Google solo permite adjuntar o entregar desde la
 misma aplicación que creó la tarea. Con tareas creadas por el profesor desde la web
-de Classroom, Google responde 403 (@ProjectPermissionDenied) y la entrega hay que
-hacerla desde la web.
+de Classroom, Google responde 403 (@ProjectPermissionDenied). Para esas,
+submit_in_browser hace la entrega manejando Google Chrome (Playwright) sobre un
+perfil por cuenta en el que iniciaste sesión una vez con `browser-login <alias>`.
 
 Configuración:
   ~/.config/google-classroom-mcp/client_secret.json      credenciales OAuth (Google Cloud Console)
@@ -33,6 +34,8 @@ Comandos:
   google-classroom-mcp accounts                          lista las cuentas configuradas
   google-classroom-mcp remove ALIAS                      quita una cuenta
   google-classroom-mcp check                             verifica la conexión de todas las cuentas
+  google-classroom-mcp browser-login ALIAS [--email X]  abre Chrome para iniciar sesión en el perfil de esa cuenta
+  google-classroom-mcp browser-status                    sesión de cada perfil de navegador
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -126,12 +130,12 @@ mcp = MCPServer(
         "parámetro account (alias o correo) es opcional; si hay varias cuentas y una herramienta "
         "no puede deducir la cuenta, te lo dirá. Para bajar los adjuntos de una tarea usa "
         "download_assignment_files (o download_file con un drive_id o URL de Drive); devuelven rutas "
-        "locales que puedes leer con Read. Para entregar un archivo local usa "
-        "submit_assignment(files=[ruta]): lo sube a Drive e intenta adjuntarlo; si Google lo rechaza "
-        "(@ProjectPermissionDenied, lo normal con tareas creadas por el profesor) el archivo ya queda "
-        "en Drive y el usuario solo lo elige en Classroom. upload_file, submit_assignment y "
-        "reclaim_submission crean archivos o modifican la entrega: úsalas solo cuando el usuario lo "
-        "pida explícitamente."
+        "locales que puedes leer con Read. Para entregar una tarea usa submit_in_browser(files=[ruta]): "
+        "maneja Chrome con la sesión del usuario, adjunta, da Entregar y verifica por la API (es la única "
+        "vía para tareas creadas por el profesor desde la web; la API las rechaza con "
+        "@ProjectPermissionDenied). submit_assignment intenta la vía API y, con files=, deja el archivo "
+        "en Drive. upload_file, submit_assignment, submit_in_browser y reclaim_submission crean archivos "
+        "o modifican la entrega: úsalas solo cuando el usuario lo pida explícitamente."
     ),
 )
 
@@ -1173,6 +1177,85 @@ def reclaim_submission(coursework_id_or_url: str, course_id: str | None = None, 
 
 
 # --------------------------------------------------------------------------- #
+# Entrega por navegador
+# --------------------------------------------------------------------------- #
+def _run_browser(payload: dict, timeout: int = 900) -> dict:
+    """Corre el flujo de navegador en un proceso aparte y devuelve su JSON final."""
+    cmd = [sys.executable, "-m", "google_classroom_mcp.browser", "submit", json.dumps(payload)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise ClassroomError(f"El navegador tardó más de {timeout // 60} minutos y se canceló.") from e
+    lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    try:
+        out = json.loads(lines[-1]) if lines else {}
+    except ValueError:
+        out = {}
+    if not out:
+        tail = (proc.stderr or proc.stdout).strip().splitlines()[-5:]
+        raise ClassroomError("El navegador terminó sin respuesta: " + " | ".join(tail))
+    if not out.get("ok"):
+        raise ClassroomError(out.get("error") or "fallo desconocido en el navegador")
+    return out
+
+
+@mcp.tool()
+@_tool
+def submit_in_browser(
+    coursework_id_or_url: str,
+    files: list[str] | None = None,
+    course_id: str | None = None,
+    turn_in: bool = True,
+    account: str | None = None,
+) -> dict:
+    """Entrega una tarea como lo harías en classroom.google.com: abre Google Chrome con el
+    perfil de esa cuenta (sesión iniciada una vez con `google-classroom-mcp browser-login
+    <alias>`), adjunta los archivos locales de `files` con "Agregar o crear > Archivo",
+    da "Entregar" (o "Marcar como completada" si no hay archivos) y al final verifica por la
+    API que la entrega quedó en TURNED_IN. Es la única vía para las tareas que el profesor
+    creó desde la web, que la API rechaza. Tarda alrededor de un minuto y abre una ventana
+    de Chrome. Con turn_in=False solo adjunta. Úsala solo cuando el usuario lo pida
+    explícitamente."""
+    paths = [_local_file(f) for f in files or []]
+    course_id, coursework_id, _ = _locate_coursework(coursework_id_or_url, course_id)
+    a = accounts.resolve(account, course_id)
+    if not a.email:
+        raise ClassroomError(f"La cuenta {a} no tiene correo guardado; vuelve a correr setup para ella.")
+    cw = a.classroom.courses().courseWork().get(courseId=course_id, id=coursework_id).execute()
+    subs = a.my_submissions(course_id, coursework_id)
+    if not subs:
+        raise ClassroomError("No encontré tu entrega para esta tarea (¿es una tarea de tipo ASSIGNMENT y estás inscrito?).")
+    if subs[0].get("state") == "TURNED_IN":
+        raise ClassroomError("Esta tarea ya está entregada. Si quieres cambiarla, primero usa reclaim_submission.")
+    if not paths and cw.get("workType") != "ASSIGNMENT":
+        raise ClassroomError("Solo sé entregar tareas de tipo ASSIGNMENT por navegador.")
+
+    payload = {
+        "alias": a.alias,
+        "url": cw["alternateLink"],
+        "email": a.email,
+        "files": [str(p) for p in paths],
+        "turn_in": turn_in,
+    }
+    browser = _run_browser(payload)
+
+    sub = a.my_submissions(course_id, coursework_id)[0]
+    result: dict[str, Any] = {
+        "account": a.alias,
+        "course_id": course_id,
+        "coursework_id": coursework_id,
+        "title": cw.get("title"),
+        "url": cw.get("alternateLink"),
+        "browser": {k: browser.get(k) for k in ("steps", "screenshot")},
+        "turned_in": sub.get("state") == "TURNED_IN",
+        "submission": _submission(sub),
+    }
+    if turn_in and not result["turned_in"]:
+        result["warning"] = "El navegador terminó pero la API aún no muestra la entrega como TURNED_IN; revisa en Classroom."
+    return result
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 CLOUD_INSTRUCTIONS = f"""\
@@ -1335,6 +1418,11 @@ def main() -> None:
         sys.exit(_list_accounts_cli())
     if cmd == "remove":
         sys.exit(_remove_account(sys.argv[2:]))
+    if cmd in ("browser-login", "browser-status", "browser-submit"):
+        from . import browser
+
+        browser.main([cmd.removeprefix("browser-"), *sys.argv[2:]])
+        return
     if cmd in ("check", "--check"):
         result = get_profile()
         print(json.dumps(result, indent=2, ensure_ascii=False) if isinstance(result, list) else result)
