@@ -98,7 +98,7 @@ Listo. Abre Claude Code y pídele, por ejemplo:
 | `GOOGLE_CLASSROOM_CLIENT_SECRET` | Ruta al client secret. Default: `<config>/client_secret.json` |
 | `GOOGLE_CLASSROOM_DOWNLOAD_DIR` | Carpeta de descargas. Default: `~/Downloads/google-classroom-mcp` |
 | `GOOGLE_CLASSROOM_BROWSER_PROFILES` | Carpeta con un perfil de Chrome por cuenta. Default: `<config>/browser-profiles` |
-| `GOOGLE_CLASSROOM_BROWSER_HEADLESS` | `1` para entregar con Chrome oculto. Default: ventana visible |
+| `GOOGLE_CLASSROOM_BROWSER_HEADLESS` | `0` para ver la ventana de Chrome al entregar. Default: oculto |
 
 ### Varias cuentas de Google
 
@@ -129,7 +129,7 @@ ids en las URLs de Classroom van en base64 y el servidor los decodifica solo.
 | `list_announcements(course_id, limit?)` | Anuncios del tablón, del más reciente al más antiguo. |
 | `download_assignment_files(coursework_id_or_url, course_id?, dest_dir?, include_submission?, export_format?)` | Baja todos los adjuntos de Drive de una tarea o material a `~/Downloads/google-classroom-mcp/<curso>/<tarea>/`. Con `include_submission=True` baja también los archivos de tu entrega. Enlaces, videos y formularios se devuelven con su URL. |
 | `download_file(file_id_or_url, filename?, dest_dir?, export_format?)` | Baja un solo archivo de Drive (el `drive_id` o `url` que devuelven las demás herramientas) y devuelve la ruta local. |
-| `submit_in_browser(coursework_id_or_url, files?, course_id?, turn_in?)` | Entrega de verdad, por navegador: abre Chrome con tu sesión, adjunta los archivos locales de `files`, da "Entregar" y verifica por la API que quedó en `TURNED_IN`. Con `turn_in=False` solo adjunta. Requiere `browser-login <alias>` una vez por cuenta. |
+| `submit_in_browser(coursework_id_or_url, files?, course_id?, turn_in?)` | Entrega de verdad, por navegador: maneja un Chrome oculto con tu sesión, adjunta los archivos locales de `files`, da "Entregar" y verifica por la API que quedó en `TURNED_IN`. Con `turn_in=False` solo adjunta. Requiere `browser-login <alias>` una vez por cuenta. |
 | `upload_file(path, folder?, name?)` | Sube un archivo local a `Entregas Classroom/` en tu Drive (o a la subcarpeta `folder`, o a un id/URL de carpeta) y devuelve su `drive_id` y `url`. |
 | `submit_assignment(coursework_id_or_url, course_id?, files?, drive_ids?, links?, turn_in?)` | Sube los archivos locales de `files` a `Entregas Classroom/<curso>/`, adjunta esos, los de `drive_ids` y/o `links` a tu entrega y si `turn_in=True` la entrega. Si Google rechaza el adjunto, devuelve en `next_step` cómo terminar desde la web. Ver el aviso de arriba. |
 | `reclaim_submission(coursework_id_or_url, course_id?)` | Anula una entrega ya enviada para poder modificarla. Misma restricción. |
@@ -167,9 +167,10 @@ Los perfiles viven en `~/.config/google-classroom-mcp/browser-profiles/<alias>` 
 el Chrome que abre Playwright cifra las cookies con una llave distinta a la de tu Chrome
 normal, así que una sesión iniciada fuera no le sirve. Si Google bloquea el inicio de
 sesión en el navegador controlado, `browser-login ALIAS --plain` abre un Chrome sin
-automatizar pero compatible. La ventana de Chrome se ve mientras entrega; con
-`GOOGLE_CLASSROOM_BROWSER_HEADLESS=1` corre oculta. Automatizar la web de Classroom no es
-un uso que Google ofrezca oficialmente; es tu cuenta y tus tareas, pero conviene saberlo.
+automatizar pero compatible. Al entregar, Chrome corre oculto en segundo plano; con
+`GOOGLE_CLASSROOM_BROWSER_HEADLESS=0` se muestra la ventana, útil para ver qué pasa si algo
+falla. Automatizar la web de Classroom no es un uso que Google ofrezca oficialmente; es tu
+cuenta y tus tareas, pero conviene saberlo.
 
 ## Comandos
 

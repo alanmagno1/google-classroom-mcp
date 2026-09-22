@@ -34,7 +34,9 @@ CONFIG_DIR = Path(
 PROFILES_DIR = Path(os.environ.get("GOOGLE_CLASSROOM_BROWSER_PROFILES", CONFIG_DIR / "browser-profiles"))
 DOWNLOAD_DIR = Path(os.environ.get("GOOGLE_CLASSROOM_DOWNLOAD_DIR", Path.home() / "Downloads" / "google-classroom-mcp"))
 SHOTS_DIR = DOWNLOAD_DIR / "_navegador"
-HEADLESS = os.environ.get("GOOGLE_CLASSROOM_BROWSER_HEADLESS", "").lower() in ("1", "true", "yes")
+# Por default el Chrome de entregas corre oculto; GOOGLE_CLASSROOM_BROWSER_HEADLESS=0 lo muestra
+# (útil para ver qué hace si algo falla). browser-login siempre abre ventana: ahí escribe el usuario.
+HEADLESS = os.environ.get("GOOGLE_CLASSROOM_BROWSER_HEADLESS", "1").lower() not in ("0", "false", "no")
 CHROME_MAC = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 CLASSROOM = "https://classroom.google.com"
 

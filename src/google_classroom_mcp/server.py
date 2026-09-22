@@ -1213,9 +1213,9 @@ def submit_in_browser(
     <alias>`), adjunta los archivos locales de `files` con "Agregar o crear > Archivo",
     da "Entregar" (o "Marcar como completada" si no hay archivos) y al final verifica por la
     API que la entrega quedó en TURNED_IN. Es la única vía para las tareas que el profesor
-    creó desde la web, que la API rechaza. Tarda alrededor de un minuto y abre una ventana
-    de Chrome. Con turn_in=False solo adjunta. Úsala solo cuando el usuario lo pida
-    explícitamente."""
+    creó desde la web, que la API rechaza. Tarda alrededor de un minuto y corre en segundo
+    plano sin mostrar ventana (GOOGLE_CLASSROOM_BROWSER_HEADLESS=0 para verla). Con
+    turn_in=False solo adjunta. Úsala solo cuando el usuario lo pida explícitamente."""
     paths = [_local_file(f) for f in files or []]
     course_id, coursework_id, _ = _locate_coursework(coursework_id_or_url, course_id)
     a = accounts.resolve(account, course_id)
