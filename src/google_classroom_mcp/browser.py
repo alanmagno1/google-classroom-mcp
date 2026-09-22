@@ -1,18 +1,18 @@
-"""Entrega por navegador.
+"""Submitting through the browser.
 
-Google no permite adjuntar ni entregar por API las tareas que el profesor creó desde la
-web de Classroom (@ProjectPermissionDenied). Este módulo hace lo mismo que haría el
-alumno en classroom.google.com, pero con Playwright manejando Google Chrome.
+Google does not allow attaching files or turning in, through the API, assignments the
+teacher created from the Classroom web app (@ProjectPermissionDenied). This module does
+what the student would do on classroom.google.com, but with Playwright driving Google Chrome.
 
-Hay un perfil de Chrome por cuenta (~/.config/google-classroom-mcp/browser-profiles/<alias>),
-cada uno con una sola sesión de Google, iniciada una vez con
-`google-classroom-mcp browser-login <alias>`. Así no dependemos de la multisesión de
-Google, que al agregar una cuenta a veces reemplaza la otra.
+There is one Chrome profile per account (~/.config/google-classroom-mcp/browser-profiles/<alias>),
+each with a single Google session, signed in once with
+`google-classroom-mcp browser-login <alias>`. That way we do not depend on Google's
+multi-account sign-in, which sometimes replaces one account when you add another.
 
-Se ejecuta en un proceso aparte del servidor MCP (Playwright síncrono no puede correr
-dentro de un bucle asyncio):
+It runs in a separate process from the MCP server (sync Playwright cannot run inside an
+asyncio loop):
 
-  python -m google_classroom_mcp.browser login ALIAS [--email CORREO] [--plain]
+  python -m google_classroom_mcp.browser login ALIAS [--email EMAIL] [--plain]
   python -m google_classroom_mcp.browser status
   python -m google_classroom_mcp.browser submit '{"alias": ..., "url": ..., "email": ..., "files": [...], "turn_in": true}'
   python -m google_classroom_mcp.browser reclaim '{"alias": ..., "url": ..., "email": ...}'
@@ -34,23 +34,23 @@ CONFIG_DIR = Path(
 )
 PROFILES_DIR = Path(os.environ.get("GOOGLE_CLASSROOM_BROWSER_PROFILES", CONFIG_DIR / "browser-profiles"))
 DOWNLOAD_DIR = Path(os.environ.get("GOOGLE_CLASSROOM_DOWNLOAD_DIR", Path.home() / "Downloads" / "google-classroom-mcp"))
-SHOTS_DIR = DOWNLOAD_DIR / "_navegador"
-# Por default el Chrome de entregas corre oculto; GOOGLE_CLASSROOM_BROWSER_HEADLESS=0 lo muestra
-# (útil para ver qué hace si algo falla). browser-login siempre abre ventana: ahí escribe el usuario.
+SHOTS_DIR = DOWNLOAD_DIR / "_browser"
+# By default the submitting Chrome runs hidden; GOOGLE_CLASSROOM_BROWSER_HEADLESS=0 shows it
+# (useful to watch what it does when something fails). browser-login always opens a window: the user types there.
 HEADLESS = os.environ.get("GOOGLE_CLASSROOM_BROWSER_HEADLESS", "1").lower() not in ("0", "false", "no")
 CHROME_MAC = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 CLASSROOM = "https://classroom.google.com"
 
-# Textos de la interfaz de Classroom en español e inglés.
-RX_ADD = r"Agregar o crear|Añadir o crear|Add or create"
-RX_FILE_ITEM = r"^\s*(Archivo|File)\s*$"
-RX_UPLOAD_TAB = r"^\s*(Subir|Upload)\s*$"
-RX_BROWSE = r"Explorar|Browse|Seleccionar archivos|Select files|Elegir archivos|Choose files"
-RX_TURN_IN = r"^\s*(Entregar|Turn in)\s*$"
-RX_MARK_DONE = r"Marcar como (completad[ao]|hech[ao])|Mark as done"
-RX_UNSUBMIT = r"Anular (la )?entrega|Unsubmit"
-# El botón "X" de cada adjunto se llama "Eliminar a <archivo>" (en inglés "Remove <archivo>").
-RX_REMOVE = r"^(Eliminar a|Quitar|Remove)\s"
+# Classroom UI labels in English and Spanish.
+RX_ADD = r"Add or create|Agregar o crear|Añadir o crear"
+RX_FILE_ITEM = r"^\s*(File|Archivo)\s*$"
+RX_UPLOAD_TAB = r"^\s*(Upload|Subir)\s*$"
+RX_BROWSE = r"Browse|Explorar|Select files|Seleccionar archivos|Choose files|Elegir archivos"
+RX_TURN_IN = r"^\s*(Turn in|Entregar)\s*$"
+RX_MARK_DONE = r"Mark as done|Marcar como (completad[ao]|hech[ao])"
+RX_UNSUBMIT = r"Unsubmit|Anular (la )?entrega"
+# The "X" button on each attachment is named "Remove <file>" (in Spanish "Eliminar a <file>").
+RX_REMOVE = r"^(Remove|Eliminar a|Quitar)\s"
 RX_EMAIL = r"[\w.+-]+@[\w.-]+\.\w+"
 
 
@@ -63,7 +63,7 @@ class BrowserError(Exception):
 def profile_dir(alias: str) -> Path:
     alias = re.sub(r"[^A-Za-z0-9._@+-]+", "_", alias.strip())
     if not alias:
-        raise BrowserError("Indica el alias de la cuenta (el mismo de `google-classroom-mcp accounts`).")
+        raise BrowserError("Give the account alias (the same one shown by `google-classroom-mcp accounts`).")
     return PROFILES_DIR / alias
 
 
@@ -74,11 +74,11 @@ def _chrome_binary() -> str:
         found = shutil.which(name)
         if found:
             return found
-    raise BrowserError("No encuentro Google Chrome instalado.")
+    raise BrowserError("Could not find a Google Chrome installation.")
 
 
 def _profile_in_use(profile: Path) -> bool:
-    """True si hay un Chrome abierto con ese perfil (Chrome no permite dos a la vez)."""
+    """True if a Chrome is open with that profile (Chrome does not allow two at once)."""
     try:
         r = subprocess.run(["pgrep", "-f", f"user-data-dir={profile}"], capture_output=True, text=True)
     except OSError:
@@ -87,7 +87,7 @@ def _profile_in_use(profile: Path) -> bool:
 
 
 class ClassroomBrowser:
-    """Chrome real (channel=chrome) sobre el perfil de una cuenta, manejado con Playwright."""
+    """Real Chrome (channel=chrome) on an account's profile, driven with Playwright."""
 
     def __init__(self, alias: str, headless: bool = HEADLESS, slow_mo: int = 0) -> None:
         self.alias = alias
@@ -103,15 +103,15 @@ class ClassroomBrowser:
 
         if not self.profile.is_dir():
             raise BrowserError(
-                f"La cuenta '{self.alias}' no tiene perfil de navegador. Corre `google-classroom-mcp browser-login {self.alias}`."
+                f"Account '{self.alias}' has no browser profile. Run `google-classroom-mcp browser-login {self.alias}`."
             )
         if _profile_in_use(self.profile):
             raise BrowserError(
-                f"Hay una ventana de Chrome abierta con el perfil de '{self.alias}'. Ciérrala y reintenta."
+                f"A Chrome window is already open with the '{self.alias}' profile. Close it and retry."
             )
         self._p = sync_playwright().start()
-        # Playwright arranca Chrome con --use-mock-keychain: las cookies quedan cifradas con
-        # esa llave, así que el inicio de sesión también debe hacerse desde aquí (ver login).
+        # Playwright starts Chrome with --use-mock-keychain: cookies get encrypted with that
+        # key, so signing in must also happen from here (see login).
         self.ctx = self._p.chromium.launch_persistent_context(
             str(self.profile),
             channel="chrome",
@@ -135,7 +135,7 @@ class ClassroomBrowser:
             if self._p:
                 self._p.stop()
 
-    # --- utilidades --------------------------------------------------------
+    # --- helpers -----------------------------------------------------------
     def shot(self, tag: str) -> str | None:
         try:
             SHOTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -147,14 +147,14 @@ class ClassroomBrowser:
 
     def fail(self, msg: str, tag: str = "error") -> BrowserError:
         shot = self.shot(tag)
-        return BrowserError(msg + (f" Captura: {shot}" if shot else ""), shot)
+        return BrowserError(msg + (f" Screenshot: {shot}" if shot else ""), shot)
 
     def _settle(self, ms: int = 1500) -> None:
         self.page.wait_for_timeout(ms)
 
-    # --- sesión ------------------------------------------------------------
+    # --- session -----------------------------------------------------------
     def session_email(self) -> str | None:
-        """Correo de la sesión de Google del perfil, o None si no hay sesión."""
+        """Email of the profile's Google session, or None if there is no session."""
         self.page.goto(f"{CLASSROOM}/u/0/h", wait_until="domcontentloaded")
         try:
             self.page.locator("[aria-label*='@']").first.wait_for(timeout=12_000)
@@ -173,17 +173,17 @@ class ClassroomBrowser:
         found = self.session_email()
         if not found:
             raise BrowserError(
-                f"El perfil de '{self.alias}' no tiene sesión de Google. Corre `google-classroom-mcp browser-login {self.alias}`."
+                f"The '{self.alias}' profile has no Google session. Run `google-classroom-mcp browser-login {self.alias}`."
             )
         if found != email.lower():
             raise BrowserError(
-                f"El perfil de '{self.alias}' tiene sesión de {found}, no de {email}. "
-                f"Corre `google-classroom-mcp browser-login {self.alias} --email {email}`."
+                f"The '{self.alias}' profile is signed in as {found}, not {email}. "
+                f"Run `google-classroom-mcp browser-login {self.alias} --email {email}`."
             )
 
-    # --- entrega -----------------------------------------------------------
+    # --- submission --------------------------------------------------------
     def open_assignment(self, url: str) -> str:
-        """Abre la tarea y espera el panel "Tu trabajo"."""
+        """Opens the assignment and waits for the "Your work" panel."""
         target = re.sub(rf"^{re.escape(CLASSROOM)}/", f"{CLASSROOM}/u/0/", url)
         self.page.goto(target, wait_until="domcontentloaded")
         self._settle(2500)
@@ -200,22 +200,22 @@ class ClassroomBrowser:
             self.require_session(email)
             target = self.open_assignment(url)
             if page.get_by_role("button", name=re.compile(RX_UNSUBMIT, re.IGNORECASE)).count():
-                raise BrowserError("La tarea ya aparece entregada ('Anular entrega'). Anúlala en Classroom si quieres cambiarla.")
+                raise BrowserError("The assignment already shows as turned in ('Unsubmit'). Unsubmit it in Classroom if you want to change it.")
             for f in files:
                 self._attach(Path(f))
-                steps.append(f"adjuntado {Path(f).name}")
+                steps.append(f"attached {Path(f).name}")
             if turn_in:
                 self._turn_in(has_files=bool(files) or self._has_attachments())
-                steps.append("entregado")
+                steps.append("turned in")
         except BrowserError:
             raise
         except Exception as e:
             msg = str(e).splitlines()[0][:300]
-            raise self.fail(f"Fallo en el navegador tras {steps or 'abrir la tarea'}: {type(e).__name__}: {msg}") from e
+            raise self.fail(f"Browser failure after {steps or 'opening the assignment'}: {type(e).__name__}: {msg}") from e
         return {"url": target, "steps": steps, "screenshot": self.shot("final")}
 
     def _has_attachments(self) -> bool:
-        # Con adjuntos el botón dice "Entregar"; sin ellos, "Marcar como completada".
+        # With attachments the button says "Turn in"; without them, "Mark as done".
         return bool(self.page.get_by_role("button", name=re.compile(RX_TURN_IN, re.IGNORECASE)).count())
 
     def _attach(self, path: Path) -> None:
@@ -223,7 +223,7 @@ class ClassroomBrowser:
         page.get_by_role("button", name=re.compile(RX_ADD, re.IGNORECASE)).first.click()
         page.get_by_role("menuitem", name=re.compile(RX_FILE_ITEM, re.IGNORECASE)).first.click()
 
-        # El selector de Google vive en un iframe (drive.google.com/picker) y abre en "Subir".
+        # Google's picker lives in an iframe (drive.google.com/picker) and opens on "Upload".
         picker = page.locator("iframe[src*='picker'], iframe.picker-frame").first
         picker.wait_for(state="visible", timeout=30_000)
         frame = page.frame_locator("iframe[src*='picker'], iframe.picker-frame").first
@@ -237,14 +237,14 @@ class ClassroomBrowser:
             browse.click()
         fc.value.set_files(str(path))
 
-        # Al terminar de subir, el selector se cierra y el archivo aparece en "Tu trabajo" con
-        # su botón "Eliminar a <archivo>" (el chip muestra el nombre recortado, no sirve).
+        # When the upload finishes the picker closes and the file shows up under "Your work"
+        # with its "Remove <file>" button (the chip shows a truncated name, so it is no use).
         picker.wait_for(state="hidden", timeout=300_000)
         self._remove_button(path.name).first.wait_for(timeout=180_000)
         self._settle()
 
     def _remove_button(self, name: str):
-        rx = re.compile(rf"^(Eliminar a|Quitar|Remove)\s+{re.escape(name)}\s*$", re.IGNORECASE)
+        rx = re.compile(rf"^(Remove|Eliminar a|Quitar)\s+{re.escape(name)}\s*$", re.IGNORECASE)
         return self.page.get_by_role("button", name=rx)
 
     def _turn_in(self, has_files: bool) -> None:
@@ -263,7 +263,7 @@ class ClassroomBrowser:
         self._settle()
 
     def reclaim(self, url: str, email: str) -> dict:
-        """Anula una entrega ya enviada ("Anular la entrega"). Los adjuntos se quedan."""
+        """Unsubmits an assignment that was already turned in ("Unsubmit"). Attachments stay."""
         page = self.page
         target = url
         try:
@@ -271,9 +271,9 @@ class ClassroomBrowser:
             target = self.open_assignment(url)
             btn = page.get_by_role("button", name=re.compile(RX_UNSUBMIT, re.IGNORECASE)).first
             if not btn.count():
-                raise BrowserError("La tarea no aparece entregada en Classroom, no hay nada que anular.")
+                raise BrowserError("The assignment does not show as turned in on Classroom, nothing to unsubmit.")
             btn.click()
-            # Classroom pide confirmar en un diálogo con el mismo texto del botón.
+            # Classroom asks for confirmation in a dialog whose button has the same label.
             dialog = page.get_by_role("dialog").last
             dialog.wait_for(state="visible", timeout=15_000)
             dialog.get_by_role("button", name=re.compile(RX_UNSUBMIT, re.IGNORECASE)).last.click()
@@ -285,11 +285,11 @@ class ClassroomBrowser:
             raise
         except Exception as e:
             msg = str(e).splitlines()[0][:300]
-            raise self.fail(f"Fallo en el navegador al anular la entrega: {type(e).__name__}: {msg}") from e
-        return {"url": target, "steps": ["entrega anulada"], "screenshot": self.shot("anulada")}
+            raise self.fail(f"Browser failure while unsubmitting: {type(e).__name__}: {msg}") from e
+        return {"url": target, "steps": ["unsubmitted"], "screenshot": self.shot("unsubmitted")}
 
     def detach(self, name: str | None = None) -> int:
-        """Quita adjuntos de una entrega no enviada: el de nombre `name`, o todos."""
+        """Removes attachments from a submission that is not turned in: the one called `name`, or all of them."""
         removed = 0
         while removed < 20:
             btn = self._remove_button(name) if name else self.page.get_by_role("button", name=re.compile(RX_REMOVE, re.IGNORECASE))
@@ -304,23 +304,23 @@ class ClassroomBrowser:
 
 
 # --------------------------------------------------------------------------- #
-# Inicio de sesión y estado
+# Login and status
 # --------------------------------------------------------------------------- #
 def login(alias: str, email: str | None = None, plain: bool = False) -> int:
-    """Abre Chrome con el perfil de la cuenta para que el usuario inicie sesión.
+    """Opens Chrome with the account's profile so the user can sign in.
 
-    Por default lo abre con Playwright (el mismo Chrome que luego entrega). En macOS
-    Playwright usa un llavero simulado para cifrar cookies; si el usuario iniciara sesión
-    en un Chrome normal sobre el mismo perfil, esas cookies quedarían cifradas con otra
-    llave y el Chrome automatizado no podría leerlas (y las borra). Con --plain se abre
-    Chrome sin automatizar pero con ese mismo llavero simulado, por si Google bloquea el
-    inicio de sesión en el navegador controlado."""
+    By default it opens through Playwright (the same Chrome that later submits). On macOS
+    Playwright uses a mock keychain to encrypt cookies; if the user signed in with a regular
+    Chrome on the same profile, those cookies would be encrypted with another key and the
+    automated Chrome could not read them (and wipes them). With --plain it opens Chrome
+    without automation but with that same mock keychain, in case Google blocks signing in
+    from the controlled browser."""
     profile = profile_dir(alias)
     profile.mkdir(parents=True, exist_ok=True)
     start = (
         f"https://accounts.google.com/AddSession?Email={email}&continue={CLASSROOM}/" if email else f"{CLASSROOM}/"
     )
-    who = f" con {email}" if email else ""
+    who = f" as {email}" if email else ""
     if plain:
         subprocess.Popen(
             [
@@ -337,15 +337,15 @@ def login(alias: str, email: str | None = None, plain: bool = False) -> int:
             stderr=subprocess.DEVNULL,
         )
         print(
-            f"Se abrió una ventana de Chrome aparte para la cuenta '{alias}' (perfil: {profile}).\n"
-            f"Inicia sesión{who} hasta ver Classroom y cierra esa instancia con Cmd+Q (tu Chrome de siempre sigue).\n"
-            "Después comprueba con:  google-classroom-mcp browser-status"
+            f"A separate Chrome window was opened for account '{alias}' (profile: {profile}).\n"
+            f"Sign in{who} until you see Classroom, then quit that instance with Cmd+Q (your usual Chrome keeps running).\n"
+            "Then check with:  google-classroom-mcp browser-status"
         )
         return 0
 
-    print(f"Se va a abrir una ventana de Chrome controlada por Playwright para la cuenta '{alias}' (perfil: {profile}).")
-    print(f"Inicia sesión{who} hasta ver Classroom y cierra la ventana. Solo esa cuenta en este perfil.")
-    print("Esperando a que cierres la ventana...", flush=True)
+    print(f"A Chrome window controlled by Playwright is about to open for account '{alias}' (profile: {profile}).")
+    print(f"Sign in{who} until you see Classroom, then close the window. Only that account in this profile.")
+    print("Waiting for you to close the window...", flush=True)
     with ClassroomBrowser(alias, headless=False) as b:
         b.page.goto(start, wait_until="domcontentloaded")
         deadline = time.time() + 20 * 60
@@ -356,14 +356,14 @@ def login(alias: str, email: str | None = None, plain: bool = False) -> int:
                 b.ctx.pages[0].wait_for_timeout(1500)
             except Exception:
                 break
-    print("Ventana cerrada. Revisando la sesión...", flush=True)
+    print("Window closed. Checking the session...", flush=True)
     with ClassroomBrowser(alias, headless=True) as b:
         found = b.session_email()
     if not found:
-        print(f"El perfil de '{alias}' sigue sin sesión de Google. Vuelve a intentar (o usa --plain).")
+        print(f"The '{alias}' profile still has no Google session. Try again (or use --plain).")
         return 1
     if email and found != email.lower():
-        print(f"El perfil de '{alias}' quedó con sesión de {found}, no de {email}. Vuelve a correr browser-login {alias}.")
+        print(f"The '{alias}' profile ended up signed in as {found}, not {email}. Run browser-login {alias} again.")
         return 1
     print(f"  {alias}\t{found}")
     return 0
@@ -371,7 +371,7 @@ def login(alias: str, email: str | None = None, plain: bool = False) -> int:
 
 def status() -> int:
     if not PROFILES_DIR.is_dir() or not any(PROFILES_DIR.iterdir()):
-        print("No hay perfiles de navegador. Corre `google-classroom-mcp browser-login <alias>`.")
+        print("No browser profiles. Run `google-classroom-mcp browser-login <alias>`.")
         return 1
     ok = True
     for profile in sorted(p for p in PROFILES_DIR.iterdir() if p.is_dir()):
@@ -383,7 +383,7 @@ def status() -> int:
             print(f"{profile.name}\t(error: {e})")
             ok = False
             continue
-        print(f"{profile.name}\t{found or '(sin sesión)'}")
+        print(f"{profile.name}\t{found or '(no session)'}")
         ok = ok and bool(found)
     return 0 if ok else 1
 
@@ -405,7 +405,7 @@ def main(argv: list[str] | None = None) -> None:
         rest = argv[1:]
         positional = [a for i, a in enumerate(rest) if not a.startswith("--") and (i == 0 or not rest[i - 1].startswith("--"))]
         if not positional:
-            print("Uso: google-classroom-mcp browser-login ALIAS [--email CORREO] [--plain]", file=sys.stderr)
+            print("Usage: google-classroom-mcp browser-login ALIAS [--email EMAIL] [--plain]", file=sys.stderr)
             sys.exit(2)
         sys.exit(login(positional[0], email=_opt(rest, "--email"), plain="--plain" in rest))
     if cmd == "status":

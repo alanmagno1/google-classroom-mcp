@@ -1,83 +1,88 @@
 # google-classroom-mcp
 
-Servidor [MCP](https://modelcontextprotocol.io) para Google Classroom, pensado para el
-alumno y con soporte para varias cuentas de Google a la vez. Permite que Claude Code,
-Claude Desktop, Cursor o cualquier cliente MCP consulte tus cursos, tareas pendientes,
-fechas de entrega, calificaciones y anuncios y, si se lo pides, adjunte archivos o
-entregue una tarea.
+[MCP](https://modelcontextprotocol.io) server for Google Classroom, built for the
+student and with support for several Google accounts at once. It lets Claude Code,
+Claude Desktop, Cursor or any MCP client look up your courses, pending assignments,
+due dates, grades and announcements and, if you ask it to, attach files or turn in
+an assignment.
 
-Usa la API oficial de Google Classroom con OAuth de tu propia cuenta. Pide permisos de
-Classroom y de Drive: solo lectura para bajar a tu disco los adjuntos de tareas,
-materiales y anuncios (los Docs, Sheets y Slides de Google se exportan a PDF, xlsx,
-etc.), y `drive.file` para subir tus entregas a una carpeta "Entregas Classroom" de tu
-Drive (con ese permiso el servidor solo ve los archivos que él mismo sube).
+It uses the official Google Classroom API with OAuth on your own account. It asks for
+Classroom and Drive permissions: read-only to download to your disk the attachments of
+assignments, materials and announcements (Google Docs, Sheets and Slides are exported
+to PDF, xlsx, etc.), and `drive.file` to upload your submissions to a "Classroom
+Submissions" folder in your Drive (with that permission the server only sees the files
+it uploads itself).
 
-> **Sobre las entregas.** La API de Google solo permite adjuntar archivos y entregar
-> desde la misma aplicación que creó la tarea. Si tu profesor la creó desde la web de
-> Classroom (lo normal), adjuntar devuelve `403 @ProjectPermissionDenied`. Es una
-> restricción de Google, no del servidor. Para esas tareas está `submit_in_browser`:
-> maneja Google Chrome con tu sesión y hace los mismos clics que tú (ver
-> [Entregar por navegador](#entregar-por-navegador)). `submit_assignment(files=[...])`
-> intenta la vía API y, si falla, al menos deja tus archivos en Drive.
+<a id="sobre-las-entregas"></a>
 
-## Requisitos
+> **About submissions.** The Google API only allows attaching files and turning in
+> from the same application that created the assignment. If your teacher created it
+> from the Classroom web app (the usual case), attaching returns
+> `403 @ProjectPermissionDenied`. That is a Google restriction, not the server's. For
+> those assignments there is `submit_in_browser`: it drives Google Chrome with your
+> session and makes the same clicks you would (see
+> [Submitting through the browser](#submitting-through-the-browser)).
+> `submit_assignment(files=[...])` tries the API route and, if it fails, at least
+> leaves your files in Drive.
 
-- [uv](https://docs.astral.sh/uv/) instalado. En macOS: `brew install uv`.
-  En cualquier sistema: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
-- Un client secret de OAuth de Google Cloud (gratis, ver abajo).
-- Google Chrome, solo si quieres entregar tareas por navegador.
-- Que tu cuenta de Classroom permita apps de terceros. Si es una cuenta
-  institucional, el administrador puede tenerlo bloqueado.
+## Requirements
 
-## Instalación
+- [uv](https://docs.astral.sh/uv/) installed. On macOS: `brew install uv`.
+  On any system: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+- A Google Cloud OAuth client secret (free, see below).
+- Google Chrome, only if you want to submit assignments through the browser.
+- Your Classroom account must allow third-party apps. If it is an institutional
+  account, the administrator may have that blocked.
 
-**1. Crea el client secret en Google Cloud** (una sola vez, unos 5 minutos):
+## Installation
 
-1. Entra a <https://console.cloud.google.com> y crea un proyecto, por ejemplo `classroom-mcp`.
-2. APIs y servicios > Biblioteca: habilita **Google Classroom API** y **Google Drive API**
-   (Drive es para poder bajar los adjuntos).
-3. APIs y servicios > Pantalla de consentimiento de OAuth (o "Google Auth Platform"):
-   tipo de usuario **Externo**, llena nombre y correo, y en **Usuarios de prueba**
-   agrega **todas** las cuentas de Google con las que entras a Classroom.
-4. APIs y servicios > Credenciales > Crear credenciales > **ID de cliente de OAuth**,
-   tipo de aplicación **Aplicación de escritorio**. Descarga el JSON.
-5. Recomendado: en Google Auth Platform > **Audiencia**, dale **Publicar app**. Mientras la
-   app esté en estado "Prueba", Google caduca cada autorización a los 7 días y hay que
-   repetir `setup`. En "Producción" la autorización dura indefinidamente; la app sigue
-   siendo tuya y sin verificar, solo verás el aviso de "app no verificada" una vez por cuenta.
+**1. Create the client secret in Google Cloud** (once, about 5 minutes):
 
-**2. Autoriza tu cuenta** (abre el navegador; el token queda en
-`~/.config/google-classroom-mcp/accounts/<alias>.json` con permisos solo para tu usuario):
+1. Go to <https://console.cloud.google.com> and create a project, for example `classroom-mcp`.
+2. APIs & Services > Library: enable **Google Classroom API** and **Google Drive API**
+   (Drive is needed to download attachments).
+3. APIs & Services > OAuth consent screen (or "Google Auth Platform"): user type
+   **External**, fill in name and email, and under **Test users** add **all** the
+   Google accounts you use to sign in to Classroom.
+4. APIs & Services > Credentials > Create credentials > **OAuth client ID**,
+   application type **Desktop app**. Download the JSON.
+5. Recommended: in Google Auth Platform > **Audience**, click **Publish app**. While the
+   app is in "Testing" status, Google expires every authorization after 7 days and you
+   have to repeat `setup`. In "Production" the authorization lasts indefinitely; the app
+   is still yours and unverified, you will just see the "unverified app" notice once per account.
+
+**2. Authorize your account** (opens the browser; the token is stored in
+`~/.config/google-classroom-mcp/accounts/<alias>.json` with permissions only for your user):
 
 ```bash
 uvx --from git+https://github.com/AlanMagno1/google-classroom-mcp google-classroom-mcp setup ~/Downloads/client_secret_XXXX.json
 ```
 
-Si Google avisa que la app no está verificada, elige "Continuar": la app es tuya.
+If Google warns that the app is not verified, choose "Continue": the app is yours.
 
-**¿Otra cuenta?** Vuelve a correr `setup` (ya sin el JSON) y en el navegador elige la
-otra cuenta de Google. Por default cada cuenta se guarda con su correo como alias; si
-prefieres un nombre corto usa `setup --as unam`. Con `--hint tu@correo.unam.mx` Google va
-directo a esa cuenta y el setup se niega a guardar si autorizas con otra (útil cuando el
-navegador tiene abierta solo la cuenta equivocada).
+**Another account?** Run `setup` again (without the JSON this time) and pick the other
+Google account in the browser. By default each account is saved with its email as the
+alias; if you prefer a short name use `setup --as unam`. With `--hint you@university.edu`
+Google goes straight to that account and setup refuses to save if you authorize with a
+different one (useful when the browser only has the wrong account open).
 
-**3. Registra el servidor en Claude Code:**
+**3. Register the server in Claude Code:**
 
 ```bash
 claude mcp add google-classroom -s user -- uvx --from git+https://github.com/AlanMagno1/google-classroom-mcp google-classroom-mcp
 ```
 
-Listo. Abre Claude Code y pídele, por ejemplo:
+Done. Open Claude Code and ask it, for example:
 
-> ¿Qué tareas tengo pendientes en Classroom?
+> What assignments do I have pending in Classroom?
 
-> Revisa https://classroom.google.com/c/NzE2NDU5MjM0/a/NjA1MzIx/details y dime qué piden.
+> Check https://classroom.google.com/c/NzE2NDU5MjM0/a/NjA1MzIx/details and tell me what it asks for.
 
-> Bájame los archivos de la práctica 3 de Minería y resume qué hay que hacer.
+> Download the files for Data Mining practice 3 and summarize what has to be done.
 
-> Entrega ~/Documents/practica3.ipynb en la práctica 3 de Minería.
+> Submit ~/Documents/practica3.ipynb to Data Mining practice 3.
 
-### Otros clientes (Claude Desktop, Cursor, etc.)
+### Other clients (Claude Desktop, Cursor, etc.)
 
 ```json
 {
@@ -90,118 +95,121 @@ Listo. Abre Claude Code y pídele, por ejemplo:
 }
 ```
 
-### Variables de entorno
+### Environment variables
 
-| Variable | Descripción |
+| Variable | Description |
 |---|---|
-| `GOOGLE_CLASSROOM_MCP_CONFIG_DIR` | Carpeta de configuración. Default: `~/.config/google-classroom-mcp` |
-| `GOOGLE_CLASSROOM_CLIENT_SECRET` | Ruta al client secret. Default: `<config>/client_secret.json` |
-| `GOOGLE_CLASSROOM_DOWNLOAD_DIR` | Carpeta de descargas. Default: `~/Downloads/google-classroom-mcp` |
-| `GOOGLE_CLASSROOM_BROWSER_PROFILES` | Carpeta con un perfil de Chrome por cuenta. Default: `<config>/browser-profiles` |
-| `GOOGLE_CLASSROOM_BROWSER_HEADLESS` | `0` para ver la ventana de Chrome al entregar. Default: oculto |
+| `GOOGLE_CLASSROOM_MCP_CONFIG_DIR` | Configuration folder. Default: `~/.config/google-classroom-mcp` |
+| `GOOGLE_CLASSROOM_CLIENT_SECRET` | Path to the client secret. Default: `<config>/client_secret.json` |
+| `GOOGLE_CLASSROOM_DOWNLOAD_DIR` | Downloads folder. Default: `~/Downloads/google-classroom-mcp` |
+| `GOOGLE_CLASSROOM_BROWSER_PROFILES` | Folder with one Chrome profile per account. Default: `<config>/browser-profiles` |
+| `GOOGLE_CLASSROOM_BROWSER_HEADLESS` | `0` to show the Chrome window when submitting. Default: hidden |
 
-### Varias cuentas de Google
+### Several Google accounts
 
-Un solo servidor maneja todas tus cuentas. Cada herramienta acepta un parámetro
-`account` opcional (alias, correo, o un pedazo de cualquiera de los dos):
+A single server handles all your accounts. Every tool accepts an optional `account`
+parameter (alias, email, or a piece of either):
 
-- Si solo hay una cuenta, nunca hace falta indicarlo.
-- `list_courses` y `list_pending_assignments` sin `account` recorren todas las cuentas
-  y marcan a cuál pertenece cada curso.
-- Las herramientas que reciben un curso o una tarea averiguan solas en qué cuenta está.
+- If there is only one account, you never need to pass it.
+- `list_courses` and `list_pending_assignments` without `account` go through every
+  account and mark which one each course belongs to.
+- Tools that take a course or an assignment work out on their own which account it is in.
 
-Si por alguna razón quieres dos servidores separados, sigue funcionando la variable
-`GOOGLE_CLASSROOM_MCP_CONFIG_DIR` con un nombre de servidor distinto para cada uno.
+If for some reason you want two separate servers, the `GOOGLE_CLASSROOM_MCP_CONFIG_DIR`
+variable still works with a different server name for each one.
 
-## Herramientas
+## Tools
 
-Todas aceptan `account?` al final. Los `course_id` aceptan también la URL del curso; los
-ids en las URLs de Classroom van en base64 y el servidor los decodifica solo.
+All of them accept `account?` as the last parameter. `course_id` also accepts the course
+URL; the ids in Classroom URLs are base64 and the server decodes them on its own.
 
-| Herramienta | Qué hace |
+| Tool | What it does |
 |---|---|
-| `list_accounts()` | Cuentas configuradas (alias, correo, nombre). |
-| `get_profile()` | Verifica la conexión y devuelve el usuario autenticado de cada cuenta. |
-| `list_courses(include_archived?)` | Cursos en los que estás inscrito como alumno, con la cuenta de cada uno. |
-| `list_pending_assignments(course_id?)` | Tareas que aún no has entregado, por cuenta y curso, ordenadas por fecha límite. Marca las vencidas. |
-| `get_course_contents(course_id)` | Tareas, preguntas y materiales del curso agrupados por tema, con el estado de tu entrega y calificación. |
-| `get_assignment(coursework_id_or_url, course_id?)` | Detalle de una tarea: instrucciones, fecha, puntos, adjuntos y tu entrega. Acepta la URL completa de Classroom. |
-| `list_announcements(course_id, limit?)` | Anuncios del tablón, del más reciente al más antiguo. |
-| `download_assignment_files(coursework_id_or_url, course_id?, dest_dir?, include_submission?, export_format?)` | Baja todos los adjuntos de Drive de una tarea o material a `~/Downloads/google-classroom-mcp/<curso>/<tarea>/`. Con `include_submission=True` baja también los archivos de tu entrega. Enlaces, videos y formularios se devuelven con su URL. |
-| `download_file(file_id_or_url, filename?, dest_dir?, export_format?)` | Baja un solo archivo de Drive (el `drive_id` o `url` que devuelven las demás herramientas) y devuelve la ruta local. |
-| `submit_in_browser(coursework_id_or_url, files?, course_id?, turn_in?)` | Entrega de verdad, por navegador: maneja un Chrome oculto con tu sesión, adjunta los archivos locales de `files`, da "Entregar" y verifica por la API que quedó en `TURNED_IN`. Con `turn_in=False` solo adjunta. Requiere `browser-login <alias>` una vez por cuenta. |
-| `reclaim_in_browser(coursework_id_or_url, course_id?)` | Anula una entrega ya enviada por navegador ("Anular la entrega") y verifica por la API que dejó de estar en `TURNED_IN`. Los adjuntos se quedan. Es la forma de anular las tareas que la API rechaza. |
-| `upload_file(path, folder?, name?)` | Sube un archivo local a `Entregas Classroom/` en tu Drive (o a la subcarpeta `folder`, o a un id/URL de carpeta) y devuelve su `drive_id` y `url`. |
-| `submit_assignment(coursework_id_or_url, course_id?, files?, drive_ids?, links?, turn_in?)` | Sube los archivos locales de `files` a `Entregas Classroom/<curso>/`, adjunta esos, los de `drive_ids` y/o `links` a tu entrega y si `turn_in=True` la entrega. Si Google rechaza el adjunto, devuelve en `next_step` cómo terminar desde la web. Ver el aviso de arriba. |
-| `reclaim_submission(coursework_id_or_url, course_id?)` | Anula una entrega ya enviada para poder modificarla. Misma restricción. |
+| `list_accounts()` | Configured accounts (alias, email, name). |
+| `get_profile()` | Checks the connection and returns the authenticated user of each account. |
+| `list_courses(include_archived?)` | Courses you are enrolled in as a student, with the account of each one. |
+| `list_pending_assignments(course_id?)` | Assignments you have not turned in yet, by account and course, sorted by due date. Flags the overdue ones. |
+| `get_course_contents(course_id)` | Assignments, questions and materials of the course grouped by topic, with the state of your submission and grade. |
+| `get_assignment(coursework_id_or_url, course_id?)` | Details of an assignment: instructions, due date, points, attachments and your submission. Accepts the full Classroom URL. |
+| `list_announcements(course_id, limit?)` | Stream announcements, newest first. |
+| `download_assignment_files(coursework_id_or_url, course_id?, dest_dir?, include_submission?, export_format?)` | Downloads every Drive attachment of an assignment or material to `~/Downloads/google-classroom-mcp/<course>/<assignment>/`. With `include_submission=True` it also downloads the files of your submission. Links, videos and forms are returned with their URL. |
+| `download_file(file_id_or_url, filename?, dest_dir?, export_format?)` | Downloads a single Drive file (the `drive_id` or `url` returned by the other tools) and returns the local path. |
+| `submit_in_browser(coursework_id_or_url, files?, course_id?, turn_in?)` | The real submission, through the browser: drives a hidden Chrome with your session, attaches the local files in `files`, clicks "Turn in" and verifies through the API that it ended up as `TURNED_IN`. With `turn_in=False` it only attaches. Requires `browser-login <alias>` once per account. |
+| `reclaim_in_browser(coursework_id_or_url, course_id?)` | Unsubmits an already turned-in assignment through the browser ("Unsubmit") and verifies through the API that it is no longer `TURNED_IN`. Attachments stay. This is the way to unsubmit the assignments the API rejects. |
+| `upload_file(path, folder?, name?)` | Uploads a local file to `Classroom Submissions/` in your Drive (or to the `folder` subfolder, or to a folder id/URL) and returns its `drive_id` and `url`. |
+| `submit_assignment(coursework_id_or_url, course_id?, files?, drive_ids?, links?, turn_in?)` | Uploads the local files in `files` to `Classroom Submissions/<course>/`, attaches those plus the ones in `drive_ids` and/or `links` to your submission and, if `turn_in=True`, turns it in. If Google rejects the attachment, it returns in `next_step` how to finish from the web app. See the notice above. |
+| `reclaim_submission(coursework_id_or_url, course_id?)` | Unsubmits an already turned-in assignment so you can modify it. Same restriction. |
 
-Los archivos nativos de Google no tienen un binario que bajar, así que se exportan:
-Docs y Slides a `pdf`, Sheets a `xlsx`, dibujos a `png`. Con `export_format` puedes pedir
-otro (`docx`, `txt`, `md`, `html`, `csv`, `pptx`...). `dest_dir` acepta una ruta absoluta o
-una carpeta relativa a la de descargas.
+Google-native files have no binary to download, so they are exported: Docs and Slides
+to `pdf`, Sheets to `xlsx`, drawings to `png`. With `export_format` you can ask for
+another one (`docx`, `txt`, `md`, `html`, `csv`, `pptx`...). `dest_dir` accepts an
+absolute path or a folder relative to the downloads folder.
 
-`upload_file` y `submit_assignment(files=...)` necesitan que la cuenta se haya autorizado
-con el permiso `drive.file`. Si la autorizaste con una versión anterior, esas dos
-herramientas te dirán qué comando correr; todo lo demás sigue funcionando sin él.
+`upload_file` and `submit_assignment(files=...)` need the account to have been authorized
+with the `drive.file` permission. If you authorized it with an earlier version, those two
+tools will tell you which command to run; everything else keeps working without it.
 
-## Entregar por navegador
+## Submitting through the browser
 
-Como la API rechaza entregar tareas creadas por el profesor, `submit_in_browser` hace la
-entrega igual que tú: con [Playwright](https://playwright.dev/python/) maneja tu Google
-Chrome instalado sobre un perfil aparte, abre la tarea con la cuenta correcta, "Agregar o
-crear" > "Archivo", sube el archivo, "Entregar", y luego confirma por la API que el estado
-cambió a `TURNED_IN`. `reclaim_in_browser` hace lo contrario: da "Anular la entrega",
-confirma y comprueba que la entrega dejó de estar en `TURNED_IN`. Si algo falla, cualquiera
-de los dos deja una captura de pantalla en `~/Downloads/google-classroom-mcp/_navegador/`.
+Since the API refuses to turn in assignments created by the teacher, `submit_in_browser`
+submits the same way you would: with [Playwright](https://playwright.dev/python/) it drives
+your installed Google Chrome on a separate profile, opens the assignment with the right
+account, "Add or create" > "File", uploads the file, "Turn in", and then confirms through
+the API that the state changed to `TURNED_IN`. `reclaim_in_browser` does the opposite: it
+clicks "Unsubmit", confirms and checks that the submission is no longer `TURNED_IN`. If
+something fails, either one leaves a screenshot in `~/Downloads/google-classroom-mcp/_browser/`.
 
-Requiere Google Chrome instalado y, por cada cuenta, una sesión iniciada una sola vez en
-un perfil de Chrome propio (una cuenta por perfil; la multisesión de Google no es
-confiable para esto):
+It requires Google Chrome installed and, for each account, a session signed in once in
+its own Chrome profile (one account per profile; Google's multi-account sign-in is not
+reliable for this):
 
 ```bash
-google-classroom-mcp browser-login unam --email tu@correo.unam.mx   # abre Chrome: inicia sesión y cierra la ventana
-google-classroom-mcp browser-login personal --email tu@gmail.com
-google-classroom-mcp browser-status                                 # sesión de cada perfil
+google-classroom-mcp browser-login unam --email you@university.edu   # opens Chrome: sign in and close the window
+google-classroom-mcp browser-login personal --email you@gmail.com
+google-classroom-mcp browser-status                                  # session of each profile
 ```
 
-Los perfiles viven en `~/.config/google-classroom-mcp/browser-profiles/<alias>` (variable
-`GOOGLE_CLASSROOM_BROWSER_PROFILES`). Inicia sesión siempre desde `browser-login`: en macOS
-el Chrome que abre Playwright cifra las cookies con una llave distinta a la de tu Chrome
-normal, así que una sesión iniciada fuera no le sirve. Si Google bloquea el inicio de
-sesión en el navegador controlado, `browser-login ALIAS --plain` abre un Chrome sin
-automatizar pero compatible. Al entregar, Chrome corre oculto en segundo plano; con
-`GOOGLE_CLASSROOM_BROWSER_HEADLESS=0` se muestra la ventana, útil para ver qué pasa si algo
-falla. Automatizar la web de Classroom no es un uso que Google ofrezca oficialmente; es tu
-cuenta y tus tareas, pero conviene saberlo.
+Profiles live in `~/.config/google-classroom-mcp/browser-profiles/<alias>` (variable
+`GOOGLE_CLASSROOM_BROWSER_PROFILES`). Always sign in from `browser-login`: on macOS the
+Chrome that Playwright opens encrypts cookies with a different key than your regular
+Chrome, so a session started elsewhere is no use to it. If Google blocks signing in from
+the controlled browser, `browser-login ALIAS --plain` opens a Chrome without automation
+but compatible with it. When submitting, Chrome runs hidden in the background; with
+`GOOGLE_CLASSROOM_BROWSER_HEADLESS=0` the window is shown, useful to watch what happens if
+something fails. Automating the Classroom web app is not a use Google offers officially;
+it is your account and your assignments, but it is worth knowing.
 
-## Comandos
+## Commands
 
 ```bash
-google-classroom-mcp setup [client_secret.json] [--as ALIAS] [--hint CORREO]   # guarda el client secret y autoriza una cuenta
-google-classroom-mcp accounts                                  # lista las cuentas configuradas
-google-classroom-mcp remove ALIAS                              # quita una cuenta
-google-classroom-mcp check                                     # verifica la conexión de todas las cuentas
-google-classroom-mcp browser-login ALIAS [--email CORREO] [--plain]   # inicia sesión en el perfil de Chrome de esa cuenta
-google-classroom-mcp browser-status                            # sesión de cada perfil de navegador
-google-classroom-mcp                                           # arranca el servidor MCP por stdio (lo usa el cliente)
+google-classroom-mcp setup [client_secret.json] [--as ALIAS] [--hint EMAIL]   # saves the client secret and authorizes an account
+google-classroom-mcp accounts                                  # lists the configured accounts
+google-classroom-mcp remove ALIAS                              # removes an account
+google-classroom-mcp check                                     # checks the connection of every account
+google-classroom-mcp browser-login ALIAS [--email EMAIL] [--plain]   # signs in to that account's Chrome profile
+google-classroom-mcp browser-status                            # session of each browser profile
+google-classroom-mcp                                           # starts the MCP server over stdio (used by the client)
 ```
 
-## Permisos que pide
+<a id="permisos-que-pide"></a>
 
-Classroom: lectura de cursos, materiales, anuncios, temas, lista del curso (para leer tu
-perfil) y correo del perfil, y lectura y escritura de tu propio trabajo de clase y tus
-entregas (`classroom.coursework.me`). Drive: solo lectura (`drive.readonly`) para bajar
-los adjuntos, y `drive.file` para subir tus entregas; con este último el servidor solo
-puede ver y tocar los archivos que él mismo creó, nunca el resto de tu Drive, y no borra
-nada. Nada se envía a ningún servidor que no sea Google. `upload_file`,
-`submit_assignment`, `submit_in_browser`, `reclaim_submission` y `reclaim_in_browser` crean
-archivos o modifican tu entrega: Claude solo debe usarlas cuando se lo pidas explícitamente.
+## Permissions requested
 
-Si ya tenías cuentas autorizadas con una versión anterior, siguen funcionando para todo
-menos para subir; para eso vuelve a correr `google-classroom-mcp setup --as <alias>
---hint <correo>` una vez por cuenta.
+Classroom: read access to courses, materials, announcements, topics, the course roster
+(to read your profile) and the profile email, and read and write access to your own
+coursework and submissions (`classroom.coursework.me`). Drive: read-only
+(`drive.readonly`) to download attachments, and `drive.file` to upload your submissions;
+with the latter the server can only see and touch the files it created itself, never the
+rest of your Drive, and it deletes nothing. Nothing is sent to any server other than
+Google's. `upload_file`, `submit_assignment`, `submit_in_browser`, `reclaim_submission`
+and `reclaim_in_browser` create files or modify your submission: Claude should only use
+them when you explicitly ask.
 
-## Desarrollo
+If you already had accounts authorized with an earlier version, they keep working for
+everything except uploading; for that, run `google-classroom-mcp setup --as <alias>
+--hint <email>` again once per account.
+
+## Development
 
 ```bash
 git clone https://github.com/AlanMagno1/google-classroom-mcp
@@ -210,12 +218,12 @@ uv sync
 uv run google-classroom-mcp check
 ```
 
-Para probar cambios locales en Claude Code sin publicar:
+To try local changes in Claude Code without publishing:
 
 ```bash
-claude mcp add google-classroom -s user -- uv --directory /ruta/a/google-classroom-mcp run google-classroom-mcp
+claude mcp add google-classroom -s user -- uv --directory /path/to/google-classroom-mcp run google-classroom-mcp
 ```
 
-## Licencia
+## License
 
 MIT

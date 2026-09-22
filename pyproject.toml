@@ -1,7 +1,7 @@
 [project]
 name = "google-classroom-mcp"
 version = "0.1.0"
-description = "Servidor MCP para Google Classroom: cursos, tareas, entregas, anuncios y materiales del alumno"
+description = "MCP server for Google Classroom: the student's courses, assignments, submissions, announcements and materials"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
