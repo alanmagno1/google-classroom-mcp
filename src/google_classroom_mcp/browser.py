@@ -15,6 +15,7 @@ dentro de un bucle asyncio):
   python -m google_classroom_mcp.browser login ALIAS [--email CORREO] [--plain]
   python -m google_classroom_mcp.browser status
   python -m google_classroom_mcp.browser submit '{"alias": ..., "url": ..., "email": ..., "files": [...], "turn_in": true}'
+  python -m google_classroom_mcp.browser reclaim '{"alias": ..., "url": ..., "email": ...}'
 """
 
 from __future__ import annotations
@@ -261,6 +262,32 @@ class ClassroomBrowser:
         page.get_by_role("button", name=re.compile(RX_UNSUBMIT, re.IGNORECASE)).first.wait_for(timeout=60_000)
         self._settle()
 
+    def reclaim(self, url: str, email: str) -> dict:
+        """Anula una entrega ya enviada ("Anular la entrega"). Los adjuntos se quedan."""
+        page = self.page
+        target = url
+        try:
+            self.require_session(email)
+            target = self.open_assignment(url)
+            btn = page.get_by_role("button", name=re.compile(RX_UNSUBMIT, re.IGNORECASE)).first
+            if not btn.count():
+                raise BrowserError("La tarea no aparece entregada en Classroom, no hay nada que anular.")
+            btn.click()
+            # Classroom pide confirmar en un diálogo con el mismo texto del botón.
+            dialog = page.get_by_role("dialog").last
+            dialog.wait_for(state="visible", timeout=15_000)
+            dialog.get_by_role("button", name=re.compile(RX_UNSUBMIT, re.IGNORECASE)).last.click()
+            page.get_by_role("button", name=re.compile(f"{RX_TURN_IN}|{RX_MARK_DONE}", re.IGNORECASE)).first.wait_for(
+                timeout=60_000
+            )
+            self._settle()
+        except BrowserError:
+            raise
+        except Exception as e:
+            msg = str(e).splitlines()[0][:300]
+            raise self.fail(f"Fallo en el navegador al anular la entrega: {type(e).__name__}: {msg}") from e
+        return {"url": target, "steps": ["entrega anulada"], "screenshot": self.shot("anulada")}
+
     def detach(self, name: str | None = None) -> int:
         """Quita adjuntos de una entrega no enviada: el de nombre `name`, o todos."""
         removed = 0
@@ -383,13 +410,16 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(login(positional[0], email=_opt(rest, "--email"), plain="--plain" in rest))
     if cmd == "status":
         sys.exit(status())
-    if cmd == "submit":
+    if cmd in ("submit", "reclaim"):
         payload = json.loads(argv[1])
         try:
             with ClassroomBrowser(payload["alias"], headless=payload.get("headless", HEADLESS)) as b:
-                result = b.submit(
-                    payload["url"], payload["email"], payload.get("files") or [], payload.get("turn_in", True)
-                )
+                if cmd == "submit":
+                    result = b.submit(
+                        payload["url"], payload["email"], payload.get("files") or [], payload.get("turn_in", True)
+                    )
+                else:
+                    result = b.reclaim(payload["url"], payload["email"])
             _emit({"ok": True, **result})
         except BrowserError as e:
             _emit({"ok": False, "error": str(e), "screenshot": e.screenshot})

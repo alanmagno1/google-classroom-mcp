@@ -19,7 +19,8 @@ Aviso sobre entregas: la API de Google solo permite adjuntar o entregar desde la
 misma aplicación que creó la tarea. Con tareas creadas por el profesor desde la web
 de Classroom, Google responde 403 (@ProjectPermissionDenied). Para esas,
 submit_in_browser hace la entrega manejando Google Chrome (Playwright) sobre un
-perfil por cuenta en el que iniciaste sesión una vez con `browser-login <alias>`.
+perfil por cuenta en el que iniciaste sesión una vez con `browser-login <alias>`, y
+reclaim_in_browser la anula por la misma vía.
 
 Configuración:
   ~/.config/google-classroom-mcp/client_secret.json      credenciales OAuth (Google Cloud Console)
@@ -134,8 +135,10 @@ mcp = MCPServer(
         "maneja Chrome con la sesión del usuario, adjunta, da Entregar y verifica por la API (es la única "
         "vía para tareas creadas por el profesor desde la web; la API las rechaza con "
         "@ProjectPermissionDenied). submit_assignment intenta la vía API y, con files=, deja el archivo "
-        "en Drive. upload_file, submit_assignment, submit_in_browser y reclaim_submission crean archivos "
-        "o modifican la entrega: úsalas solo cuando el usuario lo pida explícitamente."
+        "en Drive. Para anular una entrega ya enviada usa reclaim_in_browser (reclaim_submission es la vía "
+        "API y falla con esas mismas tareas). upload_file, submit_assignment, submit_in_browser, "
+        "reclaim_submission y reclaim_in_browser crean archivos o modifican la entrega: úsalas solo cuando "
+        "el usuario lo pida explícitamente."
     ),
 )
 
@@ -1179,11 +1182,11 @@ def reclaim_submission(coursework_id_or_url: str, course_id: str | None = None, 
 # --------------------------------------------------------------------------- #
 # Entrega por navegador
 # --------------------------------------------------------------------------- #
-def _run_browser(payload: dict, timeout: int = 900) -> dict:
-    """Corre el flujo de navegador en un proceso aparte y devuelve su JSON final."""
-    cmd = [sys.executable, "-m", "google_classroom_mcp.browser", "submit", json.dumps(payload)]
+def _run_browser(payload: dict, timeout: int = 900, cmd: str = "submit") -> dict:
+    """Corre el flujo de navegador (`submit` o `reclaim`) en un proceso aparte y devuelve su JSON final."""
+    args = [sys.executable, "-m", "google_classroom_mcp.browser", cmd, json.dumps(payload)]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
         raise ClassroomError(f"El navegador tardó más de {timeout // 60} minutos y se canceló.") from e
     lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
@@ -1226,7 +1229,7 @@ def submit_in_browser(
     if not subs:
         raise ClassroomError("No encontré tu entrega para esta tarea (¿es una tarea de tipo ASSIGNMENT y estás inscrito?).")
     if subs[0].get("state") == "TURNED_IN":
-        raise ClassroomError("Esta tarea ya está entregada. Si quieres cambiarla, primero usa reclaim_submission.")
+        raise ClassroomError("Esta tarea ya está entregada. Si quieres cambiarla, primero anúlala con reclaim_in_browser.")
     if not paths and cw.get("workType") != "ASSIGNMENT":
         raise ClassroomError("Solo sé entregar tareas de tipo ASSIGNMENT por navegador.")
 
@@ -1268,6 +1271,53 @@ def submit_in_browser(
         result["warning"] = f"El navegador dijo que adjuntó {missing} pero la API aún no los muestra; revisa en Classroom."
     elif turn_in and not result["turned_in"]:
         result["warning"] = "El navegador terminó pero la API aún no muestra la entrega como TURNED_IN; revisa en Classroom."
+    return result
+
+
+@mcp.tool()
+@_tool
+def reclaim_in_browser(coursework_id_or_url: str, course_id: str | None = None, account: str | None = None) -> dict:
+    """Anula una entrega ya enviada como lo harías en classroom.google.com ("Anular la
+    entrega"): abre Google Chrome con el perfil de esa cuenta, da el botón, confirma y verifica
+    por la API que la entrega dejó de estar en TURNED_IN. Los adjuntos se quedan, así que después
+    puedes cambiarlos o volver a entregar con submit_in_browser. Es la vía para las tareas que el
+    profesor creó desde la web, donde reclaim_submission falla. Úsala solo cuando el usuario lo
+    pida explícitamente."""
+    course_id, coursework_id, _ = _locate_coursework(coursework_id_or_url, course_id)
+    a = accounts.resolve(account, course_id)
+    if not a.email:
+        raise ClassroomError(f"La cuenta {a} no tiene correo guardado; vuelve a correr setup para ella.")
+    cw = a.classroom.courses().courseWork().get(courseId=course_id, id=coursework_id).execute()
+    subs = a.my_submissions(course_id, coursework_id)
+    if not subs:
+        raise ClassroomError("No encontré tu entrega para esta tarea.")
+    if subs[0].get("state") != "TURNED_IN":
+        raise ClassroomError(f"Esta tarea no está entregada (estado {subs[0].get('state')}), no hay nada que anular.")
+
+    browser = _run_browser({"alias": a.alias, "url": cw["alternateLink"], "email": a.email}, cmd="reclaim")
+
+    # Igual que al entregar, la API tarda unos segundos en reflejar el cambio.
+    import time
+
+    sub = subs[0]
+    for _ in range(8):
+        sub = a.my_submissions(course_id, coursework_id)[0]
+        if sub.get("state") != "TURNED_IN":
+            break
+        time.sleep(3)
+
+    result: dict[str, Any] = {
+        "account": a.alias,
+        "course_id": course_id,
+        "coursework_id": coursework_id,
+        "title": cw.get("title"),
+        "url": cw.get("alternateLink"),
+        "browser": {k: browser.get(k) for k in ("steps", "screenshot")},
+        "reclaimed": sub.get("state") != "TURNED_IN",
+        "submission": _submission(sub),
+    }
+    if not result["reclaimed"]:
+        result["warning"] = "El navegador terminó pero la API aún muestra la entrega como TURNED_IN; revisa en Classroom."
     return result
 
 
@@ -1434,7 +1484,7 @@ def main() -> None:
         sys.exit(_list_accounts_cli())
     if cmd == "remove":
         sys.exit(_remove_account(sys.argv[2:]))
-    if cmd in ("browser-login", "browser-status", "browser-submit"):
+    if cmd in ("browser-login", "browser-status", "browser-submit", "browser-reclaim"):
         from . import browser
 
         browser.main([cmd.removeprefix("browser-"), *sys.argv[2:]])

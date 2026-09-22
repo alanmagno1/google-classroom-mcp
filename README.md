@@ -130,6 +130,7 @@ ids en las URLs de Classroom van en base64 y el servidor los decodifica solo.
 | `download_assignment_files(coursework_id_or_url, course_id?, dest_dir?, include_submission?, export_format?)` | Baja todos los adjuntos de Drive de una tarea o material a `~/Downloads/google-classroom-mcp/<curso>/<tarea>/`. Con `include_submission=True` baja también los archivos de tu entrega. Enlaces, videos y formularios se devuelven con su URL. |
 | `download_file(file_id_or_url, filename?, dest_dir?, export_format?)` | Baja un solo archivo de Drive (el `drive_id` o `url` que devuelven las demás herramientas) y devuelve la ruta local. |
 | `submit_in_browser(coursework_id_or_url, files?, course_id?, turn_in?)` | Entrega de verdad, por navegador: maneja un Chrome oculto con tu sesión, adjunta los archivos locales de `files`, da "Entregar" y verifica por la API que quedó en `TURNED_IN`. Con `turn_in=False` solo adjunta. Requiere `browser-login <alias>` una vez por cuenta. |
+| `reclaim_in_browser(coursework_id_or_url, course_id?)` | Anula una entrega ya enviada por navegador ("Anular la entrega") y verifica por la API que dejó de estar en `TURNED_IN`. Los adjuntos se quedan. Es la forma de anular las tareas que la API rechaza. |
 | `upload_file(path, folder?, name?)` | Sube un archivo local a `Entregas Classroom/` en tu Drive (o a la subcarpeta `folder`, o a un id/URL de carpeta) y devuelve su `drive_id` y `url`. |
 | `submit_assignment(coursework_id_or_url, course_id?, files?, drive_ids?, links?, turn_in?)` | Sube los archivos locales de `files` a `Entregas Classroom/<curso>/`, adjunta esos, los de `drive_ids` y/o `links` a tu entrega y si `turn_in=True` la entrega. Si Google rechaza el adjunto, devuelve en `next_step` cómo terminar desde la web. Ver el aviso de arriba. |
 | `reclaim_submission(coursework_id_or_url, course_id?)` | Anula una entrega ya enviada para poder modificarla. Misma restricción. |
@@ -149,8 +150,9 @@ Como la API rechaza entregar tareas creadas por el profesor, `submit_in_browser`
 entrega igual que tú: con [Playwright](https://playwright.dev/python/) maneja tu Google
 Chrome instalado sobre un perfil aparte, abre la tarea con la cuenta correcta, "Agregar o
 crear" > "Archivo", sube el archivo, "Entregar", y luego confirma por la API que el estado
-cambió a `TURNED_IN`. Si algo falla, deja una captura de pantalla en
-`~/Downloads/google-classroom-mcp/_navegador/`.
+cambió a `TURNED_IN`. `reclaim_in_browser` hace lo contrario: da "Anular la entrega",
+confirma y comprueba que la entrega dejó de estar en `TURNED_IN`. Si algo falla, cualquiera
+de los dos deja una captura de pantalla en `~/Downloads/google-classroom-mcp/_navegador/`.
 
 Requiere Google Chrome instalado y, por cada cuenta, una sesión iniciada una sola vez en
 un perfil de Chrome propio (una cuenta por perfil; la multisesión de Google no es
@@ -192,8 +194,8 @@ entregas (`classroom.coursework.me`). Drive: solo lectura (`drive.readonly`) par
 los adjuntos, y `drive.file` para subir tus entregas; con este último el servidor solo
 puede ver y tocar los archivos que él mismo creó, nunca el resto de tu Drive, y no borra
 nada. Nada se envía a ningún servidor que no sea Google. `upload_file`,
-`submit_assignment` y `reclaim_submission` crean archivos o modifican tu entrega: Claude
-solo debe usarlas cuando se lo pidas explícitamente.
+`submit_assignment`, `submit_in_browser`, `reclaim_submission` y `reclaim_in_browser` crean
+archivos o modifican tu entrega: Claude solo debe usarlas cuando se lo pidas explícitamente.
 
 Si ya tenías cuentas autorizadas con una versión anterior, siguen funcionando para todo
 menos para subir; para eso vuelve a correr `google-classroom-mcp setup --as <alias>
