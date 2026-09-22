@@ -45,7 +45,7 @@ RX_UPLOAD_TAB = r"^\s*(Subir|Upload)\s*$"
 RX_BROWSE = r"Explorar|Browse|Seleccionar archivos|Select files|Elegir archivos|Choose files"
 RX_TURN_IN = r"^\s*(Entregar|Turn in)\s*$"
 RX_MARK_DONE = r"Marcar como (completad[ao]|hech[ao])|Mark as done"
-RX_UNSUBMIT = r"Anular entrega|Unsubmit"
+RX_UNSUBMIT = r"Anular (la )?entrega|Unsubmit"
 # El botón "X" de cada adjunto se llama "Eliminar a <archivo>" (en inglés "Remove <archivo>").
 RX_REMOVE = r"^(Eliminar a|Quitar|Remove)\s"
 RX_EMAIL = r"[\w.+-]+@[\w.-]+\.\w+"
