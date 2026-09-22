@@ -13,7 +13,7 @@ to PDF, xlsx, etc.), and `drive.file` to upload your submissions to a "Classroom
 Submissions" folder in your Drive (with that permission the server only sees the files
 it uploads itself).
 
-<a id="sobre-las-entregas"></a>
+<a id="about-submissions"></a>
 
 > **About submissions.** The Google API only allows attaching files and turning in
 > from the same application that created the assignment. If your teacher created it
@@ -191,7 +191,7 @@ google-classroom-mcp browser-status                            # session of each
 google-classroom-mcp                                           # starts the MCP server over stdio (used by the client)
 ```
 
-<a id="permisos-que-pide"></a>
+<a id="permissions-requested"></a>
 
 ## Permissions requested
 
