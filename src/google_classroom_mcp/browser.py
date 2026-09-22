@@ -46,7 +46,8 @@ RX_BROWSE = r"Explorar|Browse|Seleccionar archivos|Select files|Elegir archivos|
 RX_TURN_IN = r"^\s*(Entregar|Turn in)\s*$"
 RX_MARK_DONE = r"Marcar como (completad[ao]|hech[ao])|Mark as done"
 RX_UNSUBMIT = r"Anular entrega|Unsubmit"
-RX_REMOVE = r"Quitar (el )?archivo adjunto|Quitar adjunto|Remove attachment"
+# El botón "X" de cada adjunto se llama "Eliminar a <archivo>" (en inglés "Remove <archivo>").
+RX_REMOVE = r"^(Eliminar a|Quitar|Remove)\s"
 RX_EMAIL = r"[\w.+-]+@[\w.-]+\.\w+"
 
 
@@ -233,10 +234,15 @@ class ClassroomBrowser:
             browse.click()
         fc.value.set_files(str(path))
 
-        # Al terminar de subir, el selector se cierra y el archivo aparece en "Tu trabajo".
+        # Al terminar de subir, el selector se cierra y el archivo aparece en "Tu trabajo" con
+        # su botón "Eliminar a <archivo>" (el chip muestra el nombre recortado, no sirve).
         picker.wait_for(state="hidden", timeout=300_000)
-        page.get_by_text(path.name, exact=False).first.wait_for(timeout=60_000)
+        self._remove_button(path.name).first.wait_for(timeout=180_000)
         self._settle()
+
+    def _remove_button(self, name: str):
+        rx = re.compile(rf"^(Eliminar a|Quitar|Remove)\s+{re.escape(name)}\s*$", re.IGNORECASE)
+        return self.page.get_by_role("button", name=rx)
 
     def _turn_in(self, has_files: bool) -> None:
         page = self.page
@@ -253,17 +259,18 @@ class ClassroomBrowser:
         page.get_by_role("button", name=re.compile(RX_UNSUBMIT, re.IGNORECASE)).first.wait_for(timeout=60_000)
         self._settle()
 
-    def detach_all(self) -> int:
-        """Quita los adjuntos de una entrega no enviada (para deshacer pruebas)."""
+    def detach(self, name: str | None = None) -> int:
+        """Quita adjuntos de una entrega no enviada: el de nombre `name`, o todos."""
         removed = 0
-        rx = re.compile(RX_REMOVE, re.IGNORECASE)
         while removed < 20:
-            btn = self.page.get_by_role("button", name=rx)
+            btn = self._remove_button(name) if name else self.page.get_by_role("button", name=re.compile(RX_REMOVE, re.IGNORECASE))
             if not btn.count():
                 break
             btn.first.click()
-            self._settle(1200)
+            self._settle(1500)
             removed += 1
+            if name:
+                break
         return removed
 
 

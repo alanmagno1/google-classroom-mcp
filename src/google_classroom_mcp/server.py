@@ -1239,7 +1239,19 @@ def submit_in_browser(
     }
     browser = _run_browser(payload)
 
-    sub = a.my_submissions(course_id, coursework_id)[0]
+    # La API tarda unos segundos en reflejar lo que hizo el navegador: reintentar un poco.
+    import time
+
+    wanted = {p.name for p in paths}
+    sub = subs[0]
+    for _ in range(8):
+        sub = a.my_submissions(course_id, coursework_id)[0]
+        have = {att.get("title") for att in ((_submission(sub) or {}).get("attachments") or [])}
+        done = (sub.get("state") == "TURNED_IN") if turn_in else wanted <= have
+        if done:
+            break
+        time.sleep(3)
+
     result: dict[str, Any] = {
         "account": a.alias,
         "course_id": course_id,
@@ -1250,7 +1262,11 @@ def submit_in_browser(
         "turned_in": sub.get("state") == "TURNED_IN",
         "submission": _submission(sub),
     }
-    if turn_in and not result["turned_in"]:
+    have = {att.get("title") for att in (result["submission"] or {}).get("attachments") or []}
+    missing = sorted(wanted - have)
+    if missing:
+        result["warning"] = f"El navegador dijo que adjuntó {missing} pero la API aún no los muestra; revisa en Classroom."
+    elif turn_in and not result["turned_in"]:
         result["warning"] = "El navegador terminó pero la API aún no muestra la entrega como TURNED_IN; revisa en Classroom."
     return result
 
